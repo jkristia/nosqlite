@@ -1,0 +1,20 @@
+{
+  // This file exists for your editor, not for the build.
+  //
+  // Pylance / pyright resolve imports the way the interpreter would, and
+  // nothing installs this package: examples/basic/basic.py puts python/ on
+  // sys.path at runtime, which a static analyser never sees. Without
+  // "extraPaths" below, `from nosqlite import Database` is unresolved, every
+  // value derived from it becomes Unknown, and the whole file lights up.
+  //
+  // The TypeScript side has the same kind of file: examples/tsconfig.json.
+  "include": ["python", "examples"],
+  "extraPaths": ["python"],
+
+  // The package and both examples are clean under "strict" as well;
+  // "standard" is pyright's own default and a friendlier bar for code added
+  // later. Either way this setting wins over the editor's, so what you see
+  // here is what everyone sees.
+  "typeCheckingMode": "standard",
+  "pythonVersion": "3.12"
+}

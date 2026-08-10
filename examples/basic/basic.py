@@ -79,7 +79,10 @@ def main() -> None:
             print(" ", u["name"])
 
         print("\n-- dotted paths reach into nested objects --")
-        print(" ", users.find_one({"address.city": "Austin"})["name"], "lives in Austin")
+        # find_one returns None when nothing matches, so it has to be checked
+        # before subscripting -- a type checker insists, and it is right to.
+        austin = users.find_one({"address.city": "Austin"})
+        print(" ", austin["name"] if austin else "nobody", "lives in Austin")
 
         print("\n-- $or, and counting --")
         n = users.count({"$or": [{"age": {"$lt": 40}}, {"age": {"$gt": 60}}]})

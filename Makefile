@@ -17,8 +17,11 @@ else
 endif
 
 LIBPATH := python/nosqlite/$(LIBNAME)
+# Both bindings load the same library; each keeps a copy next to its own
+# package so the package is self-contained. `build` compiles once and copies.
+TSLIBPATH := typescript/nosqlite/$(LIBNAME)
 
-.PHONY: help build test test-race vet fmt cli example example-py clean all
+.PHONY: help build test test-race vet fmt cli example example-py example-ts ts-deps ts-check clean all
 
 help:
 	@echo "nosqlite targets:"
@@ -30,6 +33,8 @@ help:
 	@echo "  make cli         build the nsq inspection CLI into ./bin/nsq"
 	@echo "  make example     run the Go example"
 	@echo "  make example-py  build the library, then run the Python example"
+	@echo "  make example-ts  build the library, then run the TypeScript example"
+	@echo "  make ts-check    type-check the TypeScript binding with tsc"
 	@echo "  make all         fmt, vet, test, build, cli"
 	@echo "  make clean       remove build artifacts and stray .nsq files"
 
@@ -37,7 +42,8 @@ help:
 # -buildmode=c-shared also emits a .h header next to the library.
 build:
 	go build -buildmode=c-shared -o $(LIBPATH) ./capi
-	@echo "built $(LIBPATH)"
+	cp $(LIBPATH) $(TSLIBPATH)
+	@echo "built $(LIBPATH) (copied to $(TSLIBPATH))"
 
 test:
 	go test ./...
@@ -65,9 +71,27 @@ example:
 example-py: build
 	PYTHONPATH=python python3 examples/basic/basic.py
 
+# koffi is the FFI the TypeScript binding uses; Node has none built in. It
+# ships prebuilt binaries, so this is a download, not a compile. The
+# `test -d` guard keeps repeat runs offline and instant.
+ts-deps:
+	@test -d typescript/node_modules || npm --prefix typescript install --no-audit --no-fund
+
+# No compile step: Node >= 22.18 strips the types and runs the .ts file
+# directly. The example imports the binding by relative path, so nothing has to
+# be installed or linked beyond koffi above.
+example-ts: build ts-deps
+	node examples/basic/basic.ts
+
+# Node strips the type annotations without ever checking them, so this is the
+# only step that actually reads them. tsc emits nothing (see tsconfig.json).
+ts-check: ts-deps
+	typescript/node_modules/.bin/tsc -p typescript
+	@echo "typescript: no type errors"
+
 all: fmt vet test build cli
 
 clean:
-	rm -f $(LIBPATH) python/nosqlite/libnosqlite.h
-	rm -rf bin
+	rm -f $(LIBPATH) $(TSLIBPATH) python/nosqlite/libnosqlite.h
+	rm -rf bin typescript/node_modules
 	rm -f db/*.nsq db/*.nsq.trace

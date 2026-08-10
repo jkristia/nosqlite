@@ -1,0 +1,19 @@
+{
+  "name": "nosqlite",
+  "version": "0.1.0",
+  "description": "An embedded document store in one file — TypeScript binding over the same C shared library the Python package loads.",
+  "type": "module",
+  "exports": {
+    ".": "./nosqlite/index.ts"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "dependencies": {
+    "koffi": "^3.1.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
+}

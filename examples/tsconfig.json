@@ -1,0 +1,16 @@
+{
+  // This file exists for your editor, not for the build.
+  //
+  // A language server looks for the nearest tsconfig.json by walking up from
+  // the file you opened — examples/basic/, then examples/, then the repo root,
+  // which has none because this is a Go project. Without a config to find it
+  // falls back to stock compiler settings, and then every line of
+  // examples/basic/basic.ts is underlined for reasons that have nothing to do
+  // with the code.
+  //
+  // Inheriting from the binding's config means there is still exactly one set
+  // of TypeScript settings in the repo; `make ts-check` compiles the examples
+  // through that config too.
+  "extends": "../typescript/tsconfig.json",
+  "include": ["**/*.ts"]
+}

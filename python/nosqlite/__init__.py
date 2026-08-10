@@ -242,7 +242,7 @@ def _encode_sort(sort: Sequence[tuple[str, int]] | None) -> list[dict[str, Any]]
     """Turn ``[("age", -1)]`` into the wire format ``[{"field": ..., "desc": ...}]``."""
     if not sort:
         return []
-    encoded = []
+    encoded: list[dict[str, Any]] = []
     for entry in sort:
         try:
             field, direction = entry

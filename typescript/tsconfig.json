@@ -1,0 +1,33 @@
+{
+  // There is no build step: Node >= 22.18 strips the types and runs the .ts
+  // files directly, so `tsc` is only ever used as a type *checker* here
+  // (`npx tsc` — note "noEmit" below). The settings are the ones that keep the
+  // source compatible with that stripping.
+  "compilerOptions": {
+    "target": "ES2022",
+    // ESNext.Disposable is what declares Symbol.dispose, used by Database.
+    "lib": ["ES2022", "ESNext.Disposable"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+    // Spelled out because examples/tsconfig.json inherits these options from a
+    // different directory. A path in an inherited option stays relative to the
+    // file that declared it, so this keeps resolving to typescript/node_modules
+    // however far away the extending config sits.
+    "typeRoots": ["./node_modules/@types"],
+
+    // Type stripping erases types in place; it never rewrites anything. So the
+    // source must import "./ffi.ts" with the real extension, and must avoid
+    // TypeScript-only constructs that would need code generation (enums,
+    // namespaces, constructor parameter properties). "erasableSyntaxOnly"
+    // makes the compiler reject those for us.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true
+  },
+  "include": ["nosqlite/**/*.ts", "../examples/**/*.ts"]
+}

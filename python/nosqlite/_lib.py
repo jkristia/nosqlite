@@ -22,6 +22,7 @@ import ctypes
 import json
 import os
 import sys
+from collections.abc import Callable
 from typing import Any
 
 
@@ -101,13 +102,19 @@ _lib.nsq_free.argtypes = [_c_ptr]
 _lib.nsq_free.restype = None
 
 
-def _call(fn, *args) -> dict[str, Any]:
-    """Call an exported function, decode its JSON reply, and free the string."""
-    ptr = fn(*args)
+def _call(fn: Callable[..., Any], *args: Any) -> dict[str, Any]:
+    """Call an exported function, decode its JSON reply, and free the string.
+
+    ``fn`` is one of the ``_lib.nsq_*`` attributes above. ctypes builds those
+    at runtime, so there is no more precise type to give them than "something
+    callable" -- but saying that much keeps a type checker from treating every
+    value downstream as unknown.
+    """
+    ptr: Any = fn(*args)
     if not ptr:
         raise NoSQLiteError("library returned NULL")
     try:
-        payload = json.loads(ctypes.string_at(ptr).decode("utf-8"))
+        payload: dict[str, Any] = json.loads(ctypes.string_at(ptr).decode("utf-8"))
     finally:
         # Always, even if json.loads raised.
         _lib.nsq_free(ptr)

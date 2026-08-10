@@ -1,8 +1,8 @@
 # nosqlite
 
 An embedded document store in Go, in the spirit of SQLite: no server, no daemon,
-one file on disk, linked directly into the host process. Callable from Go and
-from Python.
+one file on disk, linked directly into the host process. Callable from Go,
+Python and TypeScript.
 
 **v1 supports exactly two operations: insert and query** (filter / sort / skip /
 limit). See [`docs/design.md`](docs/design.md) for the full design, and
@@ -69,16 +69,61 @@ with Database("./demo.nsq", trace="all") as db:
     print(db.collections())                    # ['users']
 ```
 
-The Python package is a thin `ctypes` wrapper over the same shared library a
-future TypeScript binding would load. `find()` applies a **default limit of
-1000** and raises if it is actually hit — use `limit=0` for everything, or
-`iter_find()` to stream without holding the whole result in memory.
+The Python package is a thin `ctypes` wrapper over the shared library.
+`find()` applies a **default limit of 1000** and raises if it is actually hit —
+use `limit=0` for everything, or `iter_find()` to stream without holding the
+whole result in memory.
+
+## Quick start — TypeScript
+
+```sh
+make build          # builds the shared library — required first
+make example-ts     # installs koffi, then runs examples/basic/basic.ts
+```
+
+```ts
+import { Database } from "../../typescript/nosqlite/index.ts";
+
+const db = new Database("./demo.nsq", { trace: "all" });
+try {
+  const users = db.collection("users");
+
+  users.insert({ name: "Ada", age: 36, tags: ["math"] });
+  users.insertMany([
+    { name: "Grace", age: 45 },
+    { name: "Alan", age: 41 },
+  ]);
+
+  for (const u of users.find({ age: { $gte: 40 } }, { sort: [["age", -1]], limit: 10 })) {
+    console.log(u.name, u.age);
+  }
+
+  console.log(users.findOne({ name: "Ada" }));      // object, or null
+  console.log(users.count({ age: { $gte: 40 } }));  // 2
+  console.log(users.count());                       // 3
+  console.log(db.collections());                    // ["users"]
+} finally {
+  db.close();
+}
+```
+
+Same library, same JSON convention, same default limit as Python (`limit: 0`
+for everything, `iterFind()` to stream). **Every call is synchronous** — the
+database is linked into this process, so there is no socket and nothing to
+`await`.
+
+Node has no built-in FFI, so the binding loads the library with
+[`koffi`](https://koffi.dev) — its one dependency, prebuilt, no compiler
+needed. There is no build step for the TypeScript itself: Node ≥ 22.18 strips
+the types and runs the source directly. `make ts-check` runs `tsc` when you
+want the types actually checked.
 
 ---
 
 ## Filters
 
-The Mongo dialect, so the same filter works from Go, Python and the CLI.
+The Mongo dialect, so the same filter works from Go, Python, TypeScript and the
+CLI.
 
 | | |
 | --- | --- |
@@ -111,7 +156,7 @@ nosqlite.Open("./demo.nsq", nosqlite.WithTrace(nosqlite.TraceAll))
 ```
 
 ```sh
-NOSQLITE_TRACE=all ./myprogram      # no recompile, works from Python too
+NOSQLITE_TRACE=all ./myprogram      # no recompile; works from Python and TypeScript too
 ```
 
 Levels: `off`, `writes`, `all` (adds queries and their scan statistics),
@@ -187,7 +232,9 @@ age := doc["age"].(float64)   // not int
 ```
 
 Comparison and sorting treat all numbers as one type, and Python's `json.loads`
-hands back `42` as an `int` again — so this is only visible from Go.
+hands back `42` as an `int` again — so this is only visible from Go. In
+TypeScript every number is a double anyway, so the round trip changes nothing;
+document values are typed `unknown`, so narrow with `Number(u.age)`.
 
 ---
 
@@ -215,10 +262,11 @@ internal/engine/   the query engine, which knows nothing about files or locks
   compare.go       cross-type total ordering
   sort.go          SortKey, result ordering, bounded heap for sort+limit
 
-cmd/nsq/           inspection CLI
-capi/              C ABI (JSON in, JSON out, integer handles)
-python/nosqlite    ctypes wrapper
-examples/basic/    main.go (Go) and basic.py (Python), the same tour twice
+cmd/nsq/             inspection CLI
+capi/                C ABI (JSON in, JSON out, integer handles)
+python/nosqlite/     ctypes wrapper
+typescript/nosqlite/ koffi wrapper (ffi.ts) + Database/Collection (index.ts)
+examples/basic/      main.go, basic.py, basic.ts — the same tour three times
 ```
 
 The `internal/engine` split is the one real boundary in the codebase: hand that
@@ -230,8 +278,17 @@ how it sorts. It never opens a file, takes a lock, or knows a collection exists.
 ```sh
 make test        # go test ./...
 make test-race   # the concurrency tests are worth running under -race
+make ts-check    # tsc over the TypeScript binding (Node only strips types)
 make all         # fmt, vet, test, build the library, build the CLI
 ```
+
+Three files exist purely so an editor sees what the runtime sees, and none of
+them affect the build: [`pyrightconfig.json`](pyrightconfig.json) puts `python/`
+on Pylance's import path, [`examples/tsconfig.json`](examples/tsconfig.json)
+gives the TypeScript language server a config to find above
+`examples/basic/basic.ts`, and [`examples/basic/package.json`](examples/basic/package.json)
+is two lines declaring that directory ES-module territory. Without them the
+examples are full of red underlines that say nothing about the code.
 
 ---
 

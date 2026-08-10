@@ -21,7 +21,7 @@ aren't yet familiar; this document assumes them.
   language with no translation layer.
 - Go standard library only. No third-party dependencies.
 - Durable by default: a completed `Insert` survives `kill -9`.
-- Callable from Python (and later TypeScript) through a C ABI.
+- Callable from Python and TypeScript through a C ABI.
 - **Small, flat memory footprint.** A million documents costs ~12 MB of index; the
   documents themselves stay on disk and are streamed past, never all resident (§4).
   Datasets much larger than RAM are fine.
@@ -817,9 +817,9 @@ is documentation plus a default `limit` in the language bindings; the real fix i
 batched or cursor-based `nsq_find_batch(h, coll, queryJSON, cursorID)` returning N
 documents at a time, which is the `ForEach` equivalent for FFI and is a §11 item.
 
-The same `.so` is what a future TypeScript binding loads (`node-ffi-napi`, Bun's
-`bun:ffi`, or Deno's `Deno.dlopen`) — the JSON-in/JSON-out convention means that binding
-is the same shape as the Python one, not a new design.
+The same `.so` is what the TypeScript binding loads — `koffi` on Node, and the
+same file would serve Bun's `bun:ffi` or Deno's `Deno.dlopen`. The JSON-in/JSON-out
+convention means that binding is the same shape as the Python one, not a new design.
 
 ---
 
@@ -943,10 +943,19 @@ nosqlite/
 │       ├── __init__.py         Database, Collection, NoSQLiteError
 │       ├── _lib.py             ctypes bindings, _call helper
 │       └── libnosqlite.so      build artifact (gitignored)
+├── typescript/
+│   ├── package.json            one dependency: koffi (Node has no built-in FFI)
+│   ├── tsconfig.json           type-check only; Node runs the .ts files as-is
+│   └── nosqlite/
+│       ├── index.ts            Database, Collection, NoSQLiteError
+│       ├── ffi.ts              koffi bindings, call helper
+│       └── libnosqlite.so      build artifact, copied by make (gitignored)
 ├── examples/
 │   └── basic/                  one directory per example: a Go program is a
 │       ├── main.go             directory, so two examples cannot share one
-│       └── basic.py
+│       ├── basic.py
+│       ├── basic.ts
+│       └── package.json        only says {"type": "module"}, for basic.ts
 ├── docs/
 │   ├── nosql-primer.md
 │   └── design.md
@@ -999,7 +1008,8 @@ Ordered, each pointing at the extension point left for it:
 7. **Multi-process exclusion** — `flock` on the database file (§6, #3). Multi-process
    *sharing* is a much larger change and needs a WAL.
 8. **Multi-document atomicity** — begin/commit records via a new `op` value (§6, #4).
-9. **TypeScript binding** — same `.so`, same JSON convention (§8).
+9. ~~**TypeScript binding**~~ — done: `typescript/nosqlite`, same `.so`, same JSON
+   convention (§8), loaded with `koffi` because Node has no FFI of its own.
 10. **`$elemMatch`, `$all`, `$size`, `$regex`** — new Matcher node types (§5).
 11. **External merge sort** — only if an unlimited `Sort` over a huge match set turns out
     to be a real workload rather than a mistake (§5).

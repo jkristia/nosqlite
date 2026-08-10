@@ -4,10 +4,17 @@ python/nosqlite/libnosqlite.so
 python/nosqlite/libnosqlite.dylib
 python/nosqlite/nosqlite.dll
 python/nosqlite/libnosqlite.h
+typescript/nosqlite/libnosqlite.so
+typescript/nosqlite/libnosqlite.dylib
+typescript/nosqlite/nosqlite.dll
 
 # Python bytecode
 __pycache__/
 *.py[cod]
+
+# Node. package-lock.json is committed on purpose: it pins koffi's exact
+# version so `make example-ts` installs the same thing on every machine.
+node_modules/
 
 # Databases and traces. The examples write theirs into db/, which has its own
 # .gitignore; these two patterns catch any stray ones written elsewhere.

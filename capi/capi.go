@@ -3,8 +3,8 @@
 //	go build -buildmode=c-shared -o libnosqlite.so ./capi
 //
 // That produces libnosqlite.so (or .dylib / .dll) plus a generated
-// libnosqlite.h. Python loads it with ctypes; a future TypeScript binding loads
-// the very same file.
+// libnosqlite.h. Python loads it with ctypes and TypeScript with koffi — the
+// very same file, and the same JSON convention on both sides.
 //
 // Three rules make this boundary boring, which is what you want from an FFI
 // boundary:
