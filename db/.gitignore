@@ -1,0 +1,8 @@
+# The examples write their database and trace files into this directory.
+#
+# Git tracks files, not directories, so an empty db/ would vanish from a clone
+# and the examples would have to create it. This file solves that the usual
+# way: ignore everything in here, but keep the file itself, so the directory
+# survives in the repository while its contents never get committed.
+*
+!.gitignore

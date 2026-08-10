@@ -1,0 +1,15 @@
+# Build artifacts
+bin/
+python/nosqlite/libnosqlite.so
+python/nosqlite/libnosqlite.dylib
+python/nosqlite/nosqlite.dll
+python/nosqlite/libnosqlite.h
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Databases and traces. The examples write theirs into db/, which has its own
+# .gitignore; these two patterns catch any stray ones written elsewhere.
+*.nsq
+*.nsq.trace
