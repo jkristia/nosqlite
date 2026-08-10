@@ -273,6 +273,94 @@ The `internal/engine` split is the one real boundary in the codebase: hand that
 package a decoded document and it will tell you whether the document matches and
 how it sorts. It never opens a file, takes a lock, or knows a collection exists.
 
+## Low-level call flow (TypeScript → C ABI → Go)
+
+One example per lifecycle stage — Python's `_lib.py` mirrors `ffi.ts` exactly,
+same JSON-in/JSON-out convention, so this covers both bindings.
+
+```mermaid
+sequenceDiagram
+    participant App as TS app
+    participant Idx as index.ts<br/>(Database/Collection)
+    participant FFI as ffi.ts<br/>(koffi)
+    participant Cap as capi.go<br/>(nsq_*)
+    participant Reg as registry<br/>map[int64]*handle
+    participant Core as nosqlite.go<br/>(*DB, *Collection)
+
+    App->>Idx: new Database(path, opts)
+    Idx->>FFI: openDatabase(path, wire)
+    FFI->>Cap: nsq_open(path, optsJSON)
+    Cap->>Core: nosqlite.Open(path, opts...)
+    Core-->>Cap: *DB
+    Cap->>Reg: registry[id] = &handle{db}
+    Cap-->>FFI: C string {"handle": id}
+    FFI-->>Idx: id (number)
+    Idx-->>App: #handle = id
+
+    App->>Idx: users.insert(doc)
+    Idx->>FFI: ffi.insert(handle, "users", doc)
+    FFI->>Cap: nsq_insert(handle, coll, docJSON)
+    Cap->>Reg: acquire(id): refs++
+    Cap->>Core: db.Collection("users").InsertJSON(doc)
+    Core-->>Cap: docID
+    Cap->>Reg: release(h): refs--
+    Cap-->>FFI: C string {"id": docID}
+    FFI->>Cap: nsq_free(ptr)
+    FFI-->>Idx: docID
+    Idx-->>App: docID
+
+    App->>Idx: db.close()
+    Idx->>FFI: closeDatabase(handle)
+    FFI->>Cap: nsq_close(handle)
+    Cap->>Reg: closed = true, wait refs == 0
+    Cap->>Core: db.Close()
+    Cap-->>FFI: C string {"ok": true}
+    Idx-->>App: #handle = null
+```
+
+**`new Database(path, opts)` → `nsq_open`**
+[index.ts:111-121](typescript/nosqlite/index.ts#L111-L121) ·
+[ffi.ts:131-133](typescript/nosqlite/ffi.ts#L131-L133) ·
+[capi.go:167-215](capi/capi.go#L167-L215) ·
+[nosqlite.go:248](nosqlite.go#L248)
+
+- `index.ts` builds a snake_case `wire` options object (JS is camelCase, the wire format isn't)
+- `ffi.ts` `JSON.stringify`s it, calls `nsq_open(path, optsJSON)` through koffi
+- `nsq_open` unmarshals the options JSON into `openOptions`, translates each field into a `nosqlite.Option` (`WithSync`, `WithTrace`, ...)
+- calls `nosqlite.Open`, which returns `*DB` — a real Go pointer, and it **never crosses the FFI wall**: cgo forbids storing Go pointers in C-owned memory
+- instead `capi.go` stashes it: `registry[id] = &handle{db: db}`, where `id` is just a package-level incrementing `int64`
+- responds with the JSON `{"handle": id}`, marshaled into a `C.CString` (a heap copy the Go GC doesn't know about)
+- `ffi.ts` decodes that string, frees it, parses the JSON, returns `id` as a JS `number`
+- `index.ts` stores it in the private field `#handle` — **that integer is the only thing JS ever holds**; the real `*DB` lives entirely on the Go side, keyed by that id
+
+**Every data call — `insert`, `insertMany`, `find`, `count`, `collections`**
+[ffi.ts:139-157](typescript/nosqlite/ffi.ts#L139-L157) ·
+[capi.go:248-397](capi/capi.go#L248-L397)
+
+- same shape every time: `Collection.method()` → `ffi.method(handle, ...)` → `nsq_method(handle, ...)`
+- `capi.go` calls `acquire(id)` first: looks up `registry[id]`, errors `invalid handle` / `handle is closed` if it can't proceed, else `refs++`
+- `defer release(h)` decrements `refs` on the way out — runs on every return path, including errors and recovered panics
+- looks up the collection with `h.db.Collection(name)`, then calls the real method (`InsertJSON`, `Find`, `Count`, `Collections`)
+- `nil` Go slices are normalized to `[]` before marshaling, never `null` — so the JS/Python side can always iterate without a null check
+- `guard(&out)` — a deferred `recover()` — turns any panic anywhere in the call into `{"error": "nosqlite: panic: ..."}` instead of taking the whole process down
+
+**`close()` → `nsq_close`**
+[index.ts:127-134](typescript/nosqlite/index.ts#L127-L134) ·
+[capi.go:218-246](capi/capi.go#L218-L246)
+
+- `index.ts` sets `#handle = null` **before** calling `ffi.closeDatabase` — so if the call throws, a second `close()` can't try to double-close the same handle
+- `nsq_close` sets `h.closed = true` under `registryMu` first — any `nsq_*` call arriving after this point fails cleanly instead of racing the close
+- then blocks on `registryCond.Wait()` until `h.refs == 0` — i.e. any `nsq_insert`/`nsq_find` already in flight *on another thread* gets to finish first
+- only then: `delete(registry, id)`, then `h.db.Close()` (flush + close the OS file)
+
+**String ownership, every single call**
+[ffi.ts:106-127](typescript/nosqlite/ffi.ts#L106-L127) ·
+[capi.go:399-406](capi/capi.go#L399-L406)
+
+- every `nsq_*` return value is built with `C.CString` — a copy on the C heap, invisible to Go's GC, that must be freed exactly once
+- koffi functions are declared to return `void *`, not `char *` — with `char *` koffi would auto-copy into a JS string and drop the pointer, leaving nothing to free
+- `ffi.ts`'s `call()` wraps every invocation in `try { decode + JSON.parse } finally { nsqFree(ptr) }` so no call site can forget
+
 ## Development
 
 ```sh
