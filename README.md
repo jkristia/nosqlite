@@ -5,7 +5,8 @@ one file on disk, linked directly into the host process. Callable from Go,
 Python and TypeScript.
 
 **v1 supports exactly two operations: insert and query** (filter / sort / skip /
-limit). See [`docs/design.md`](docs/design.md) for the full design, and
+limit). See [`docs/design.md`](docs/design.md) for the full design,
+[`docs/matcher.md`](docs/matcher.md) for how filters compile and match, and
 [`docs/nosql-primer.md`](docs/nosql-primer.md) if *collection* and *document*
 are new terms.
 
