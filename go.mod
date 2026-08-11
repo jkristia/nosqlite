@@ -7,8 +7,12 @@
 // work; change it freely if you publish this somewhere else.
 module github.com/jkristia/nosqlite
 
-// The minimum Go toolchain version required to build this module.
-go 1.22
+// The minimum Go *language* version this module builds against. It is a floor,
+// not the compiler you have installed: it gates which syntax and standard-library
+// APIs are allowed, and selects version-specific semantics (e.g. the Go 1.22
+// per-iteration loop variable). A newer toolchain honours this setting and will
+// reject anything introduced after it.
+go 1.24
 
 // There is no "require" block: the design mandates standard library only, so
 // this module has zero third-party dependencies.
