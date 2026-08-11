@@ -1,5 +1,6 @@
 # Build artifacts
 bin/
+__debug_bin*
 python/nosqlite/libnosqlite.so
 python/nosqlite/libnosqlite.dylib
 python/nosqlite/nosqlite.dll

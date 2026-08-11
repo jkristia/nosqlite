@@ -46,7 +46,12 @@ func validateCollectionName(name string) error {
 // Caller must hold db.mu for writing, and must have checked that the name is
 // valid and not already present.
 func (db *DB) defineCollection(name string) (*Collection, error) {
-	if int(db.nextID) > maxCollections {
+	// nextID is a uint16, so it can never literally exceed maxCollections
+	// (65535, the type's own max). The real danger is nextID wrapping from
+	// 65535 back to 0 in registerCollection's id+1; since ids start at 1 and
+	// 0 is otherwise never assigned, nextID == 0 is the tell that we've
+	// wrapped and every id is taken.
+	if db.nextID == 0 {
 		return nil, fmt.Errorf("nosqlite: cannot create %q: the %d collection limit is reached",
 			name, maxCollections)
 	}

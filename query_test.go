@@ -34,8 +34,31 @@ func names(docs []map[string]any) []string {
 	}
 	return out
 }
+func ages(docs []map[string]any) []float64 {
+	out := make([]float64, len(docs))
+	for i, d := range docs {
+		var ok bool
+		out[i], ok = d["age"].(float64)
+		if !ok {
+			out[i] = 0
+		}
+	}
+	return out
+}
 
 func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func equalFloats64(a, b []float64) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -135,6 +158,11 @@ func TestSortSkipLimit(t *testing.T) {
 	want = []string{"Barbara", "Ada", "Alan", "Edsger", "Grace"}
 	if got := names(docs); !equalStrings(got, want) {
 		t.Errorf("ascending by age: got %v, want %v", got, want)
+	}
+	ages := ages(docs)
+	expectedAges := []float64{0, 36, 41, 41, 45} // null is represented as 0 in ages()
+	if !equalFloats64(ages, expectedAges) {
+		t.Errorf("ascending by age: got ages %v, want %v", ages, expectedAges)
 	}
 
 	// Sort + limit goes through the bounded heap.
