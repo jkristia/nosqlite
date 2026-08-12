@@ -6,9 +6,13 @@ Python and TypeScript.
 
 **v1 supports exactly two operations: insert and query** (filter / sort / skip /
 limit). See [`docs/design.md`](docs/design.md) for the full design,
-[`docs/matcher.md`](docs/matcher.md) for how filters compile and match, and
-[`docs/nosql-primer.md`](docs/nosql-primer.md) if *collection* and *document*
-are new terms.
+[`docs/file-format.md`](docs/file-format.md) for what is on disk and how a
+collection scans its own records,
+[`docs/updates-and-compaction.md`](docs/updates-and-compaction.md) for how
+update/delete will work once they land, [`docs/matcher.md`](docs/matcher.md) for
+how filters compile and match, and
+[`docs/nosql-primer.md`](docs/nosql-primer.md) if *collection* and *document* are
+new terms.
 
 ```
 ./demo.nsq          the database — one file, all collections, copy it anywhere
