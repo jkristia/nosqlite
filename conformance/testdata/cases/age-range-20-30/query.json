@@ -1,0 +1,5 @@
+{
+    "$schema": "../../query.schema.json",
+    "dataset": "people",
+    "filter": {"age": {"$gte": 20, "$lte": 30}}
+}

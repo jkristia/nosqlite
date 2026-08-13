@@ -1,0 +1,7 @@
+{
+    "go.buildTags": "conformance",
+    "go.testTags": "conformance",
+
+    "jest.rootPath": "conformance/typescript",
+    "jest.jestCommandLine": "node --experimental-vm-modules node_modules/.bin/jest"
+}

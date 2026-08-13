@@ -1,0 +1,6 @@
+{
+    "$schema": "../../query.schema.json",
+    "dataset": "people",
+    "filter": {"age": {"$gt": 60}, "gender": "male"},
+    "sort": [{"field": "age"}]
+}

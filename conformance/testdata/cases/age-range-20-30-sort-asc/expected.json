@@ -1,0 +1,19 @@
+{
+    "$schema": "../../expected.schema.json",
+    "ids": ["1", "26", "2", "27", "3", "28", "4", "29", "5", "30", "6", "31"],
+    "fields": ["_id", "age", "name"],
+    "docs": [
+        {"_id": "1", "age": 20, "name": "Ada Turner"},
+        {"_id": "26", "age": 20, "name": "Sophia Novak"},
+        {"_id": "2", "age": 22, "name": "Ada Andersen"},
+        {"_id": "27", "age": 22, "name": "Lucas Rivera"},
+        {"_id": "3", "age": 24, "name": "Maya Patel"},
+        {"_id": "28", "age": 24, "name": "Lucas Osei"},
+        {"_id": "4", "age": 26, "name": "Liam Bennett"},
+        {"_id": "29", "age": 26, "name": "Grace Kowalski"},
+        {"_id": "5", "age": 28, "name": "Liam Silva"},
+        {"_id": "30", "age": 28, "name": "Ada Chen"},
+        {"_id": "6", "age": 30, "name": "Noah Novak"},
+        {"_id": "31", "age": 30, "name": "Maya Turner"}
+    ]
+}

@@ -1,0 +1,6 @@
+{
+    "$schema": "../../query.schema.json",
+    "dataset": "people",
+    "sort": [{"field": "age"}, {"field": "name"}],
+    "limit": 5
+}

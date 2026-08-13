@@ -1,0 +1,48 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "Conformance case query",
+    "description": "One query.json under conformance/testdata/cases/<name>/. Mirrors nosqlite.Query (query.go) plus a `dataset` name to look up in testdata/datasets/.",
+    "type": "object",
+    "required": ["dataset"],
+    "additionalProperties": false,
+    "properties": {
+        "$schema": { "type": "string" },
+        "dataset": {
+            "type": "string",
+            "description": "Name of a file in testdata/datasets/ (without .json) to insert before running this query."
+        },
+        "filter": {
+            "type": "object",
+            "description": "Mongo-dialect filter document (query.go's Query.Filter). A bare `\"field\": value` means equality. Operators — usable as a field's value, or $and/$or/$not at any level: $and, $or, $not, $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists. Full grammar: docs/matcher.md."
+        },
+        "sort": {
+            "type": "array",
+            "description": "Sort keys applied in order. Omit for insertion order.",
+            "items": {
+                "type": "object",
+                "required": ["field"],
+                "additionalProperties": false,
+                "properties": {
+                    "field": {
+                        "type": "string",
+                        "description": "Dotted field path, e.g. \"address.city\"."
+                    },
+                    "desc": {
+                        "type": "boolean",
+                        "description": "true = descending. Default false (ascending)."
+                    }
+                }
+            }
+        },
+        "skip": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Drop this many matches before returning any. Default 0."
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Cap the number of results returned. 0 or omitted means no limit."
+        }
+    }
+}

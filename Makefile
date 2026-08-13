@@ -21,22 +21,25 @@ LIBPATH := python/nosqlite/$(LIBNAME)
 # package so the package is self-contained. `build` compiles once and copies.
 TSLIBPATH := typescript/nosqlite/$(LIBNAME)
 
-.PHONY: help build test test-race vet fmt cli example example-py example-ts ts-deps ts-check clean all
+.PHONY: help build test test-race vet fmt cli example example-py example-ts ts-deps ts-check \
+	conformance conformance-ts conformance-ts-deps clean all
 
 help:
 	@echo "nosqlite targets:"
-	@echo "  make build       build the C shared library into $(LIBPATH)"
-	@echo "  make test        run the Go test suite"
-	@echo "  make test-race   run the tests under the race detector"
-	@echo "  make vet         run go vet"
-	@echo "  make fmt         gofmt every Go file in place"
-	@echo "  make cli         build the nsq inspection CLI into ./bin/nsq"
-	@echo "  make example     run the Go example"
-	@echo "  make example-py  build the library, then run the Python example"
-	@echo "  make example-ts  build the library, then run the TypeScript example"
-	@echo "  make ts-check    type-check the TypeScript binding with tsc"
-	@echo "  make all         fmt, vet, test, build, cli"
-	@echo "  make clean       remove build artifacts and stray .nsq files"
+	@echo "  make build           build the C shared library into $(LIBPATH)"
+	@echo "  make test            run the Go test suite"
+	@echo "  make test-race       run the tests under the race detector"
+	@echo "  make vet             run go vet"
+	@echo "  make fmt             gofmt every Go file in place"
+	@echo "  make cli             build the nsq inspection CLI into ./bin/nsq"
+	@echo "  make example         run the Go example"
+	@echo "  make example-py      build the library, then run the Python example"
+	@echo "  make example-ts      build the library, then run the TypeScript example"
+	@echo "  make ts-check        type-check the TypeScript binding with tsc"
+	@echo "  make conformance     run the Go conformance suite (docs/testing.md)"
+	@echo "  make conformance-ts  build the library, then run the TypeScript conformance suite"
+	@echo "  make all             fmt, vet, test, build, cli"
+	@echo "  make clean           remove build artifacts and stray .nsq files"
 
 # The shared library must exist before the Python package works at all.
 # -buildmode=c-shared also emits a .h header next to the library.
@@ -89,9 +92,22 @@ ts-check: ts-deps
 	typescript/node_modules/.bin/tsc -p typescript
 	@echo "typescript: no type errors"
 
+# The `conformance` build tag keeps this out of `make test` / `go test ./...`
+# — see docs/testing.md §4 for why it's a separate suite.
+conformance:
+	go test -tags=conformance ./conformance/...
+
+# A separate node_modules from typescript/'s: this one needs jest and ts-jest,
+# which the shipped binding has no reason to depend on.
+conformance-ts-deps:
+	@test -d conformance/typescript/node_modules || npm --prefix conformance/typescript install --no-audit --no-fund
+
+conformance-ts: build conformance-ts-deps
+	npm --prefix conformance/typescript test
+
 all: fmt vet test build cli
 
 clean:
 	rm -f $(LIBPATH) $(TSLIBPATH) python/nosqlite/libnosqlite.h
-	rm -rf bin typescript/node_modules
+	rm -rf bin typescript/node_modules conformance/typescript/node_modules
 	rm -f db/*.nsq db/*.nsq.trace

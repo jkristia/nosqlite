@@ -10,7 +10,8 @@ limit). See [`docs/design.md`](docs/design.md) for the full design,
 collection scans its own records,
 [`docs/updates-and-compaction.md`](docs/updates-and-compaction.md) for how
 update/delete will work once they land, [`docs/matcher.md`](docs/matcher.md) for
-how filters compile and match, and
+how filters compile and match, [`docs/testing.md`](docs/testing.md) for how unit,
+conformance, and scale tests are organized across the three languages, and
 [`docs/nosql-primer.md`](docs/nosql-primer.md) if *collection* and *document* are
 new terms.
 

@@ -1,0 +1,12 @@
+{
+    "$schema": "../../expected.schema.json",
+    "ids": ["25", "50", "24", "49", "23"],
+    "fields": ["_id", "age", "name"],
+    "docs": [
+        {"_id": "25", "age": 68, "name": "Ethan Silva"},
+        {"_id": "50", "age": 68, "name": "Emma Chen"},
+        {"_id": "24", "age": 66, "name": "Ethan Bennett"},
+        {"_id": "49", "age": 66, "name": "Noah Kowalski"},
+        {"_id": "23", "age": 64, "name": "Olivia Patel"}
+    ]
+}
