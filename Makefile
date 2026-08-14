@@ -22,7 +22,7 @@ LIBPATH := python/nosqlite/$(LIBNAME)
 TSLIBPATH := typescript/nosqlite/$(LIBNAME)
 
 .PHONY: help build test test-race vet fmt cli example example-py example-ts ts-deps ts-check \
-	conformance conformance-ts conformance-ts-deps clean all
+	conformance conformance-ts conformance-ts-deps conformance-py conformance-py-deps clean all
 
 help:
 	@echo "nosqlite targets:"
@@ -38,6 +38,7 @@ help:
 	@echo "  make ts-check        type-check the TypeScript binding with tsc"
 	@echo "  make conformance     run the Go conformance suite (docs/testing.md)"
 	@echo "  make conformance-ts  build the library, then run the TypeScript conformance suite"
+	@echo "  make conformance-py  build the library, then run the Python conformance suite"
 	@echo "  make all             fmt, vet, test, build, cli"
 	@echo "  make clean           remove build artifacts and stray .nsq files"
 
@@ -105,7 +106,17 @@ conformance-ts-deps:
 conformance-ts: build conformance-ts-deps
 	npm --prefix conformance/typescript test
 
-all: fmt vet test build cli
+# A project-local venv, gitignored, lazily installed — mirrors
+# conformance-ts-deps above. The `test -d` guard keeps repeat runs offline
+# and instant.
+conformance-py-deps:
+	@test -d conformance/python/.venv || python3 -m venv conformance/python/.venv
+	@conformance/python/.venv/bin/pip install -q -r conformance/python/requirements-dev.txt
+
+conformance-py: build conformance-py-deps
+	PYTHONPATH=python conformance/python/.venv/bin/pytest conformance/python
+
+all: fmt vet test build cli conformance conformance-ts conformance-py
 
 clean:
 	rm -f $(LIBPATH) $(TSLIBPATH) python/nosqlite/libnosqlite.h

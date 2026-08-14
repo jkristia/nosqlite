@@ -17,6 +17,9 @@ __pycache__/
 # version so `make example-ts` installs the same thing on every machine.
 node_modules/
 
+# Python conformance suite's project-local venv (mirrors node_modules/ above).
+conformance/python/.venv/
+
 # Databases and traces. The examples write theirs into db/, which has its own
 # .gitignore; these two patterns catch any stray ones written elsewhere.
 *.nsq
