@@ -15,55 +15,55 @@ import { CaseRunner } from "./case-runner.ts";
 const cases = new CaseRunner();
 
 test("age-gte-41", () => {
-  const { got, expected, gotDocs, expectedDocs } = cases.run("age-gte-41");
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/comparison/age-gte-41");
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
 
 test("age-asc-top5", () => {
-  const { got, expected, gotDocs, expectedDocs } = cases.run("age-asc-top5");
+  const { got, expected, gotDocs, expectedDocs } = cases.run("sort/single-key/age-asc-top5");
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
 
 test("age-desc-top5", () => {
-  const { got, expected, gotDocs, expectedDocs } = cases.run("age-desc-top5");
+  const { got, expected, gotDocs, expectedDocs } = cases.run("sort/single-key/age-desc-top5");
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
 
 test("age-asc-top5-name-asc", () => {
-  const { got, expected, gotDocs, expectedDocs } = cases.run("age-asc-top5-name-asc");
+  const { got, expected, gotDocs, expectedDocs } = cases.run("sort/multi-key/age-asc-top5-name-asc");
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
 
 test("age-asc-top5-name-desc", () => {
-  const { got, expected, gotDocs, expectedDocs } = cases.run("age-asc-top5-name-desc");
+  const { got, expected, gotDocs, expectedDocs } = cases.run("sort/multi-key/age-asc-top5-name-desc");
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
 
 test("age-range-20-30", () => {
-  const { got, expected, gotDocs, expectedDocs } = cases.run("age-range-20-30");
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/comparison/age-range-20-30");
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
 
 test("age-range-20-30-sort-asc", () => {
-  const { got, expected, gotDocs, expectedDocs } = cases.run("age-range-20-30-sort-asc");
+  const { got, expected, gotDocs, expectedDocs } = cases.run("combined/age-range-20-30-sort-asc");
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
 
 test("age-gt-60-male", () => {
-  const { got, expected, gotDocs, expectedDocs } = cases.run("age-gt-60-male");
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/comparison/age-gt-60-male");
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
 
 test("age-gt-60-male-sort-asc", () => {
-  const { got, expected, gotDocs, expectedDocs } = cases.run("age-gt-60-male-sort-asc");
+  const { got, expected, gotDocs, expectedDocs } = cases.run("combined/age-gt-60-male-sort-asc");
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
