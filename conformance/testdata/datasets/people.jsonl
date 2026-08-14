@@ -48,3 +48,6 @@
 {"_id":"48","address":{"street":"64 Nathan Rd","city":"Hong Kong","country":"Hong Kong"},"age":64,"email":"liam.osei@example.com","gender":"male","name":"Liam Osei","tags":["gaming","reading","hiking"]}
 {"_id":"49","address":{"street":"12 King Street","city":"London","zip":"EC1A 1BB","country":"UK"},"age":66,"email":"noah.kowalski@example.com","gender":"male","name":"Noah Kowalski"}
 {"_id":"50","address":{"street":"221 Baker Ave","city":"New York","state":"NY","zip":"10001","country":"USA"},"age":68,"email":"emma.chen@example.com","gender":"female","name":"Emma Chen","tags":["hiking"]}
+{"_id":"51","address":{"street":"14 Kenyatta Ave","city":"Nairobi","country":"Kenya"},"age":19,"email":"mona.haddad@example.com","gender":"female","name":"Mona Haddad","tags":["reading"]}
+{"_id":"52","address":{"street":"6 Sheikh Zayed Rd","city":"Dubai","country":"UAE"},"age":19,"email":"zoe.ibrahim@example.com","gender":"female","name":"Zoe Ibrahim"}
+{"_id":"53","address":{"street":"21 Tahrir St","city":"Cairo","country":"Egypt"},"age":19,"email":"amir.farouk@example.com","gender":"male","name":"Amir Farouk","tags":["gaming","code"]}
