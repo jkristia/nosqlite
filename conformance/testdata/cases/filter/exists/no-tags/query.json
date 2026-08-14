@@ -1,0 +1,5 @@
+{
+    "$schema": "../../../query.schema.json",
+    "dataset": "people",
+    "filter": {"tags": {"$exists": false}}
+}

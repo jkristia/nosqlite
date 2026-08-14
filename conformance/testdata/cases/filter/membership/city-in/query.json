@@ -1,0 +1,5 @@
+{
+    "$schema": "../../../query.schema.json",
+    "dataset": "people",
+    "filter": {"address.city": {"$in": ["London", "Paris", "Toronto"]}}
+}

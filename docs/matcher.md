@@ -93,9 +93,33 @@ map iteration, and sorted keys make the tree and any error message deterministic
 | `{"name": "Ada"}` | `cmpNode{path, opEq, "Ada"}` — a bare literal is `$eq` |
 | `{"age": {"$gte": 30, "$lt": 40}}` | `andNode` of two `cmpNode`s |
 | `{"$or": [ … ]}` | `orNode` over each branch |
+| `{"$and": [ … ]}` | `andNode` over each branch — same code path as `$or` (`compileBranches`), just building the other logical node |
 | `{"a": {"$not": {"$gt": 1}}}` | `notNode` wrapping the compiled field |
 | `{"a": {"$gt": 1, "b": 2}}` | **error** — mixes operators and plain keys |
 | `{"a": {"$nope": 1}}` | **error** — unknown operator |
+
+### Implicit AND vs. explicit `$and`
+
+Two or more operators inside *one field's* operator document are always ANDed — there is
+no way to get an OR out of that shape, because it compiles to a single `andNode` before
+`$or`/`$and` ever come into play. That's why a range needs no operator at all:
+
+```
+{"age": {"$gte": 20, "$lte": 30}}
+```
+
+is already `20 ≤ age ≤ 30`. Writing it with an explicit `$and` is equivalent — legal, just
+more verbose:
+
+```
+{"$and": [{"age": {"$gt": 20}}, {"age": {"$lt": 60}}]}
+```
+
+`$and` only earns its keep when the constraints can't be merged into one operator document —
+most commonly ORing two constraints on the *same* field, which implicit AND cannot express at
+all: `{"$or": [{"age": {"$lt": 20}}, {"age": {"$gt": 60}}]}` reads "younger than 20 or older
+than 60"; there is no `{"age": {...}}` shape that means the same thing, since every key inside
+one field's operator document ANDs together.
 
 ### Worked example
 

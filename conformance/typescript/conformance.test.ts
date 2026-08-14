@@ -67,3 +67,39 @@ test("age-gt-60-male-sort-asc", () => {
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
+
+test("age-under-20-or-over-60", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/logical/age-under-20-or-over-60");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("not-age-gt-60", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/logical/not-age-gt-60");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("city-in", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/membership/city-in");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("city-nin", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/membership/city-nin");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("has-tags", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/exists/has-tags");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("no-tags", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/exists/no-tags");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});

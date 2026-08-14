@@ -1,0 +1,18 @@
+{
+    "$schema": "../../../expected.schema.json",
+    "ids": ["22", "23", "24", "25", "47", "48", "49", "50", "51", "52", "53"],
+    "fields": ["_id", "age", "name"],
+    "docs": [
+        {"_id": "22", "age": 62, "name": "Emma Andersen"},
+        {"_id": "23", "age": 64, "name": "Olivia Patel"},
+        {"_id": "24", "age": 66, "name": "Ethan Bennett"},
+        {"_id": "25", "age": 68, "name": "Ethan Silva"},
+        {"_id": "47", "age": 62, "name": "Liam Rivera"},
+        {"_id": "48", "age": 64, "name": "Liam Osei"},
+        {"_id": "49", "age": 66, "name": "Noah Kowalski"},
+        {"_id": "50", "age": 68, "name": "Emma Chen"},
+        {"_id": "51", "age": 19, "name": "Mona Haddad"},
+        {"_id": "52", "age": 19, "name": "Zoe Ibrahim"},
+        {"_id": "53", "age": 19, "name": "Amir Farouk"}
+    ]
+}
