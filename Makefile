@@ -22,7 +22,7 @@ LIBPATH := python/nosqlite/$(LIBNAME)
 TSLIBPATH := typescript/nosqlite/$(LIBNAME)
 
 .PHONY: help build test test-race vet fmt cli example example-py example-ts ts-deps ts-check \
-	conformance conformance-ts conformance-ts-deps conformance-py conformance-py-deps clean all
+	conformance conformance-ts conformance-ts-deps conformance-py py-deps clean all
 
 help:
 	@echo "nosqlite targets:"
@@ -39,7 +39,7 @@ help:
 	@echo "  make conformance     run the Go conformance suite (docs/testing.md)"
 	@echo "  make conformance-ts  build the library, then run the TypeScript conformance suite"
 	@echo "  make conformance-py  build the library, then run the Python conformance suite"
-	@echo "  make all             fmt, vet, test, build, cli"
+	@echo "  make all             fmt, vet, test, build, cli, all three conformance suites"
 	@echo "  make clean           remove build artifacts and stray .nsq files"
 
 # The shared library must exist before the Python package works at all.
@@ -103,22 +103,26 @@ conformance:
 conformance-ts-deps:
 	@test -d conformance/typescript/node_modules || npm --prefix conformance/typescript install --no-audit --no-fund
 
-conformance-ts: build conformance-ts-deps
+# `ts-deps` as well as `conformance-ts-deps`: the suite imports the shipped
+# binding, and that binding imports koffi out of typescript/node_modules. On a
+# fresh clone, without it, jest fails with "Cannot find module 'koffi'".
+conformance-ts: build ts-deps conformance-ts-deps
 	npm --prefix conformance/typescript test
 
-# A project-local venv, gitignored, lazily installed — mirrors
-# conformance-ts-deps above. The `test -d` guard keeps repeat runs offline
-# and instant.
-conformance-py-deps:
-	@test -d conformance/python/.venv || python3 -m venv conformance/python/.venv
-	@conformance/python/.venv/bin/pip install -q -r conformance/python/requirements-dev.txt
+# One venv for all of the project's Python dev tooling, gitignored, lazily
+# created. It lives at the root rather than beside the suite that currently uses
+# it: the binding itself has no dependencies, so pytest is the only thing that
+# ever goes in here, and an editor discovers ./.venv without being configured.
+py-deps:
+	@test -d .venv || { python3 -m venv .venv && echo "created .venv"; }
+	@.venv/bin/pip install -q -r requirements-dev.txt
 
-conformance-py: build conformance-py-deps
-	PYTHONPATH=python conformance/python/.venv/bin/pytest conformance/python
+conformance-py: build py-deps
+	PYTHONPATH=python .venv/bin/pytest conformance/python
 
 all: fmt vet test build cli conformance conformance-ts conformance-py
 
 clean:
 	rm -f $(LIBPATH) $(TSLIBPATH) python/nosqlite/libnosqlite.h
-	rm -rf bin typescript/node_modules conformance/typescript/node_modules
+	rm -rf bin typescript/node_modules conformance/typescript/node_modules .venv
 	rm -f db/*.nsq db/*.nsq.trace

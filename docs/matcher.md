@@ -128,8 +128,8 @@ map[string]any{
     "age":  map[string]any{"$gte": 30},
     "tags": map[string]any{"$in": []any{"go", "db"}},
     "$or": []any{
-        map[string]any{"city": "Oslo"},
-        map[string]any{"city": "Bergen"},
+        map[string]any{"address.city": "Oslo"},
+        map[string]any{"address.city": "Bergen"},
     },
 }
 ```
@@ -138,18 +138,22 @@ Sorted keys are `$or, age, tags` (`$` sorts before letters), so:
 
 ```
 andNode
-├── orNode                                  ← "$or"
-│   ├── cmpNode{["city"], opEq, "Oslo"}
-│   └── cmpNode{["city"], opEq, "Bergen"}
-├── cmpNode{["age"],  opGte, 30}            ← "age"
-└── inNode  {["tags"], ["go","db"]}         ← "tags"
+├── orNode                                             ← "$or"
+│   ├── cmpNode{["address","city"], opEq, "Oslo"}
+│   └── cmpNode{["address","city"], opEq, "Bergen"}
+├── cmpNode{["age"],  opGte, 30}                       ← "age"
+└── inNode  {["tags"], ["go","db"]}                    ← "tags"
 ```
 
-Note `["city"]`, `["age"]` — `SplitPath` has already turned `"address.city"` into
-`["address","city"]`. No string splitting ever happens per document.
+Note the paths in the tree are already slices: `SplitPath` ran once at compile time, turning
+`"address.city"` into `["address","city"]`. No string splitting ever happens per document.
 
-`andNode`/`orNode` short-circuit, so cheap leaves placed early cost little. Ordering is
-currently just key order; a planner could reorder by selectivity.
+Children are evaluated left to right and stop at the first decisive answer: `andNode` returns
+`false` on the first child that fails, `orNode` returns `true` on the first that succeeds. A
+document with `age: 20` fails the `age` leaf and never reaches `tags`.
+
+Child order is sorted key order (or array order for explicit `$and`/`$or`) — unrelated to cost
+or selectivity. A planner could reorder them to test the cheapest, most selective child first.
 
 ---
 

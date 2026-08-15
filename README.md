@@ -4,6 +4,10 @@ An embedded document store in Go, in the spirit of SQLite: no server, no daemon,
 one file on disk, linked directly into the host process. Callable from Go,
 Python and TypeScript.
 
+**New here, or setting up a fresh clone?**
+[`docs/getting-started.md`](docs/getting-started.md) is the step-by-step: what to
+install, in what order, and how to tell it worked.
+
 **v1 supports exactly two operations: insert and query** (filter / sort / skip /
 limit). See [`docs/design.md`](docs/design.md) for the full design,
 [`docs/file-format.md`](docs/file-format.md) for what is on disk and how a
@@ -369,11 +373,15 @@ sequenceDiagram
 
 ## Development
 
+Prerequisites and first-build instructions live in
+[`docs/getting-started.md`](docs/getting-started.md) — the short version is Go
+1.24+, a C compiler, and (per binding) Python 3.9+ or Node 22.18+.
+
 ```sh
 make test        # go test ./...
 make test-race   # the concurrency tests are worth running under -race
 make ts-check    # tsc over the TypeScript binding (Node only strips types)
-make all         # fmt, vet, test, build the library, build the CLI
+make all         # the above plus the library, the CLI, and all three conformance suites
 ```
 
 Three files exist purely so an editor sees what the runtime sees, and none of
