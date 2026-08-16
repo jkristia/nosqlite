@@ -92,6 +92,24 @@ test("city-nin", () => {
   expect(gotDocs).toEqual(expectedDocs);
 });
 
+test("tag-eq-code", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/membership/tag-eq-code");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("tag-in-music-art", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/membership/tag-in-music-art");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("tag-all-code-music", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/membership/tag-all-code-music");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
 test("has-tags", () => {
   const { got, expected, gotDocs, expectedDocs } = cases.run("filter/exists/has-tags");
   expect(got).toEqual(expected);
