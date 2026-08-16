@@ -305,3 +305,93 @@ func itoa(n int) string {
 	}
 	return string(buf[i:])
 }
+
+// TestScanLiveCountsSupersededRecords exercises the offline live/dead analysis
+// against a file containing replaces and deletes.
+//
+// Nothing writes op=2 or op=3 yet, and replay rejects both, so the test builds
+// such a file the only way currently possible: by appending the records
+// directly, below the API. That is deliberate — ScanLive has to be right before
+// the write paths land, since it is how `nsq stat` will report whether
+// compaction is worth running.
+func TestScanLiveCountsSupersededRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "garbage.nsq")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c, err := db.Collection("users")
+	if err != nil {
+		t.Fatalf("Collection: %v", err)
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if _, err := c.Insert(map[string]any{"_id": id, "v": 1}); err != nil {
+			t.Fatalf("Insert %s: %v", id, err)
+		}
+	}
+
+	// Record the sizes of the two records about to be superseded, so the
+	// expected dead-byte total is derived from the file rather than guessed.
+	db.mu.Lock()
+	deadA := recordHeaderSize + int64(c.lengths[0]) // "a", about to be replaced
+	deadB := recordHeaderSize + int64(c.lengths[1]) // "b", about to be deleted
+
+	// Replace "a" with a bigger document, then delete "b".
+	replacement := []byte(`{"_id":"a","v":2,"padding":"xxxxxxxxxxxxxxxx"}`)
+	if _, _, err := db.appendRecord(opReplace, c.id, replacement); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("appendRecord replace: %v", err)
+	}
+	tombstone := []byte(`{"_id":"b"}`)
+	_, tombstoneTotal, err := db.appendRecord(opDelete, c.id, tombstone)
+	if err != nil {
+		db.mu.Unlock()
+		t.Fatalf("appendRecord delete: %v", err)
+	}
+	db.mu.Unlock()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stats, err := ScanLive(path)
+	if err != nil {
+		t.Fatalf("ScanLive: %v", err)
+	}
+
+	// "a" survives as its replacement, "b" is gone, "c" is untouched.
+	if got := stats.Documents[c.id]; got != 2 {
+		t.Errorf("live documents = %d, want 2", got)
+	}
+	// The old "a", the old "b", and the tombstone that removed "b".
+	wantDead := deadA + deadB + int64(tombstoneTotal)
+	if stats.Dead != wantDead {
+		t.Errorf("dead bytes = %d, want %d (old a %d + old b %d + tombstone %d)",
+			stats.Dead, wantDead, deadA, deadB, tombstoneTotal)
+	}
+	// Live bytes must be the replacement plus "c", never the superseded pair.
+	wantLive := int64(recordHeaderSize+len(replacement)) + recordHeaderSize + int64(c.lengths[2])
+	if stats.Bytes[c.id] != wantLive {
+		t.Errorf("live bytes = %d, want %d", stats.Bytes[c.id], wantLive)
+	}
+}
+
+// TestScanLiveOnInsertOnlyFile is the baseline: with nothing superseded, every
+// record is live and there are no dead bytes.
+func TestScanLiveOnInsertOnlyFile(t *testing.T) {
+	path := buildFile(t, 5)
+
+	stats, err := ScanLive(path)
+	if err != nil {
+		t.Fatalf("ScanLive: %v", err)
+	}
+	if stats.Dead != 0 {
+		t.Errorf("dead bytes on an insert-only file = %d, want 0", stats.Dead)
+	}
+	total := 0
+	for _, n := range stats.Documents {
+		total += n
+	}
+	if total != 5 {
+		t.Errorf("live documents = %d, want 5", total)
+	}
+}

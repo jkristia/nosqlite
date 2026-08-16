@@ -53,9 +53,13 @@ func (c *Collection) scanRecords(snap snapshot, visit func(i int, payload []byte
 	if n == 0 {
 		return nil
 	}
-	// Both paths return exactly the same documents in the same order; the
-	// choice is purely about how many bytes get read.
-	if snap.total > 0 && float64(n)/float64(snap.total) >= sequentialScanRatio {
+	// Both paths return exactly the same documents in the same order — but only
+	// while the index and the file agree, which stops being true the moment a
+	// record is superseded by a replace or a delete. scanSequential re-derives
+	// membership from the file; scanStrided reads the index. Once dirty is set,
+	// only the index knows which records are still live, so the strided path is
+	// the only correct one. See docs/updates-and-compaction.md §2.2.
+	if !snap.dirty && snap.total > 0 && float64(n)/float64(snap.total) >= sequentialScanRatio {
 		return c.scanSequential(snap, visit)
 	}
 	return c.scanStrided(snap, visit)
@@ -71,7 +75,7 @@ func (c *Collection) scanSequential(snap snapshot, visit func(int, []byte) (bool
 	// Reading through a SectionReader bounded by the snapshot's file size means
 	// a concurrent writer appending right now is invisible to this scan — which
 	// is exactly the snapshot semantics we promise.
-	section := io.NewSectionReader(c.db.file, headerSize, snap.size-headerSize)
+	section := io.NewSectionReader(snap.file, headerSize, snap.size-headerSize)
 	r := bufio.NewReaderSize(section, 64<<10)
 
 	var hdr [recordHeaderSize]byte
@@ -132,7 +136,7 @@ func (c *Collection) scanStrided(snap snapshot, visit func(int, []byte) (bool, e
 			buf = make([]byte, length)
 		}
 		buf = buf[:length]
-		if _, err := c.db.file.ReadAt(buf, snap.offsets[i]); err != nil {
+		if _, err := snap.file.ReadAt(buf, snap.offsets[i]); err != nil {
 			return fmt.Errorf("nosqlite: reading %s document at offset %d: %w",
 				c.name, snap.offsets[i], err)
 		}

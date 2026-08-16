@@ -1,22 +1,42 @@
-# Updates, deletes, garbage, and compaction
+# Replace, delete, garbage, and compaction
 
-What has to happen for `Update` and `Delete` to exist, written down **before** the code
-is written, because two of the decisions here are hard to reverse afterwards.
+How mutation works on an append-only file: what `Replace` and `Delete` do to the file, to
+the in-memory index, and to the cost of opening a database.
 
-Companion to [`file-format.md`](file-format.md), which describes the format as it stands
-today. Nothing in this document is implemented — it is roadmap items 1 and 2 of
-[`design.md`](design.md) §11, worked out far enough to commit to.
+Companion to [`file-format.md`](file-format.md), which describes the record format itself.
+This is roadmap item 1 of [`design.md`](design.md) §11. `Replace` and the groundwork under
+it are built, replay included; `Delete` and `Compact` are designed here but not yet
+written — §8 tracks which is which.
+
+## Terms
+
+There are two orderings of the same documents here, and most of this design's subtleties
+live in the gap between them. Where the two could be confused, the text below says which
+one it means.
+
+| term | is | lives |
+|---|---|---|
+| **the index**, **the index arrays** | `c.offsets []int64` and `c.lengths []uint32` in [`index.go`](../index.go) — one element per live document, in insertion order | memory |
+| **position**, or the subscript `i` | where a document sits in those arrays | memory |
+| **slot** | the same thing, used where the emphasis is on the element rather than the ordering | memory |
+| **offset** | where a document's bytes start in the file | disk |
+
+**There is no index on disk.** The database file is framed records in write order and
+nothing else — no allocation bitmap, no free list, no per-record live flag, no tree.
+Everything the engine knows about *where* a document is, and whether it is still live, is
+derived state held in memory and rebuilt by `replay` on every `Open`. (Secondary indexes,
+roadmap item 2, do not change this: design.md §11 has them rebuilding from the log too.)
+
+Most of §2 follows from one sentence in that vocabulary: **a replace keeps a document's
+position and changes its offset.**
 
 ---
 
-## 1. The question that starts this
+## 1. Payload size does not matter
 
-> *What happens if I update a record with a larger payload? Does it get written at the
-> end and the old range marked as unused — giving a fragmented file after a while?*
-
-**Larger, smaller, identical — it makes no difference.** This is worth stating first,
-because it is the single biggest thing the append-only layout buys and it is easy to
-carry a slotted-page intuition into it.
+Update a document with a larger payload, a smaller one, or an identical one: it makes no
+difference. That is the single biggest thing the append-only layout buys, and it is easy
+to miss when carrying a slotted-page intuition into it.
 
 | | slotted-page store (SQLite, Postgres) | append-only log (here) |
 |---|---|---|
@@ -26,7 +46,7 @@ carry a slotted-page intuition into it.
 | code paths | three, plus a free-space map | **one** |
 
 An update is `db.appendRecord(opReplace, c.id, newPayload)` at `db.size`, exactly like an
-insert ([`store.go:184`](../store.go#L184)). There is no size class, no free list, no
+insert ([`appendRecord`](../store.go)). There is no size class, no free list, no
 best-fit search, no page split. That whole family of problems is traded away.
 
 What gets traded *for* it is the subject of the rest of this document.
@@ -43,8 +63,8 @@ Instead:
 
 > **A record is dead if, and only if, nothing in the in-memory index points at it.**
 
-The index is the sole authority on liveness, and it is rebuilt from scratch on every
-`Open` ([`replay`](../store.go#L307)). The file itself is just bytes in write order.
+The in-memory index is the sole authority on liveness, and it is rebuilt from scratch on
+every `Open` ([`replay`](../store.go)). The file itself is just bytes in write order.
 
 ```
        live                    dead                   live
@@ -67,30 +87,40 @@ it is well understood, and **it is not the hard part.**
 
 ---
 
-## 2. The hard part: three invariants this breaks
+## 2. Three invariants mutation breaks
 
-The difficulty is not space. It is that three separate fast paths in this codebase
-quietly assume *a slot's contents never change*.
+The difficulty is not space. It is that three separate fast paths in this codebase assume
+*a slot's contents never change*.
 
-Everything below is written in terms of update, because that is where each break is
+Everything below is written in terms of replace, because that is where each break is
 easiest to see. **Delete breaks all three the same way** — removing a slot mutates the
-arrays just as re-pointing one does — so §6 inherits this section wholesale rather than
-repeating it.
+arrays just as re-pointing one does — so §6 inherits this section rather than repeating
+it.
 
-### 2.1 The index immutability rule
+### 2.1 The in-memory index immutability rule
 
-[`index.go:63-70`](../index.go#L63-L70) states it outright:
+[`appendIndex`](../index.go) states it outright:
 
-> THE ONE RULE that makes lock-free reads safe: index entries may be appended and the
-> backing arrays may be reallocated, but **element i must never be rewritten once
-> published.**
+> **Once an index entry is visible to a snapshot, its value never changes again.**
 
-An update wants precisely that — `offsets[i]` must move from the old payload to the new
-one. And readers scan with **no lock held** ([`snapshot`](../index.go#L96)), sharing the
-writer's backing array.
+Appending is exempt, and it is worth seeing why, because `append` can write into the very
+array a reader is holding. [`snapshot`](../index.go) caps its slices with
+`c.offsets[0:n:n]`, so a reader can only ever look at positions `0..n-1` of the array as
+it was when the snapshot was taken. `append`'s write lands at index `n` — outside that
+view. Reallocating is equally invisible: the reader simply keeps the old array.
+
+A replace wants the case the rule actually forbids: `offsets[i]` must move from the old
+payload to the new one, for an `i` that readers are already looking at. And they scan with
+**no lock held**, sharing the writer's backing array.
+
+The escape hatch — the only safe way to change such an entry — is to build new arrays and
+publish them under the write lock, which is what §4 does. Being precise about what
+"changes" there matters: the document at position `i` gets a new offset, while *element
+`i` of every array a reader is currently holding* is never written. The rule governs
+elements of published arrays, not positions in the abstract.
 
 This is not a theoretical race. `offsets` and `lengths` are two *separate* arrays
-([`index.go:41-42`](../index.go#L41-L42)), so there is no way to update both as one
+([`Collection`](../index.go)), so there is no way to update both as one
 operation:
 
 Slot 3 starts as `offset 990, length 287` and is being updated to `offset 88712,
@@ -122,10 +152,10 @@ read/write of the same word with no synchronisation is a data race by the Go mem
 model — `go test -race` would flag it even on a 64-bit machine where the store happens to
 be atomic in practice.
 
-### 2.2 `scanSequential` stops being correct
+### 2.2 `scanSequential` is only correct while nothing is superseded
 
-[`scan.go:92`](../scan.go#L92) deliberately **ignores the index** and re-derives
-membership from the file:
+[`scan.go`](../scan.go)'s sequential path deliberately **ignores the index** and
+re-derives membership from the file:
 
 ```go
 if coll != c.id || op != opInsert {
@@ -134,11 +164,29 @@ if coll != c.id || op != opInsert {
 }
 ```
 
-That is valid today only because *"every insert record with this coll id, in file order"*
-**is** the collection. Introduce replace records and it is false — the pass would stream
-past both the old and the new version of a document with no way to tell which is live.
-Resolving it by `_id` means parsing every record and carrying a seen-set, which destroys
-the streaming property that justifies the path in the first place.
+That is valid only while *"every insert record with this coll id, in file order"* **is**
+the collection. One replace or delete makes it false — the pass streams past both the old
+and the new version of a document with no way to tell which is live. Resolving it by
+`_id` would mean parsing every record and carrying a seen-set, which destroys the
+streaming property that justifies the path in the first place.
+
+The engine therefore does not try. `Collection.dirty` ([`index.go`](../index.go)) is set
+the first time a document in the collection is superseded, and `scanRecords` sends every
+subsequent scan down the strided path, which reads the index and so knows exactly which
+records are live. It is a blunt instrument — one replace disables the fast path for the
+whole collection — but it is one bool and one branch, it fails in the safe direction, and
+`Compact` clears it.
+
+`dirty` is captured into `snapshot` rather than read at scan time, because `scanRecords`
+runs with no lock held and reading the live field there would be a data race.
+
+One related imprecision, accepted deliberately: `db.total` counts *documents*, not
+records, so it does not grow when a replace does. It is the denominator of the
+sequential-versus-strided ratio, which means a file carrying a lot of superseded records
+looks cheaper to scan sequentially than it is. That costs a little accuracy for *other*
+collections sharing the file; the mutated collection itself is pinned to the strided path
+by `dirty` regardless. Counting records instead would fix the ratio and break `traceOpen`,
+which reports the same field as `docs=`.
 
 ### 2.3 Offsets stop ascending
 
@@ -152,7 +200,7 @@ after:    offsets = [ 44, 88712,   990,  1408 ]      not ascending
 
 Two things depended on that ordering:
 
-- [`scanStrided`](../scan.go#L117) advertises *"the offsets ascend, so this is a
+- [`scanStrided`](../scan.go) advertises *"the offsets ascend, so this is a
   forward-only strided read that the page cache handles well."* It becomes genuine random
   I/O.
 - It removes the cheap fix for §2.2 — walking the file and an ascending offset list
@@ -164,61 +212,61 @@ file-order equal to insertion-order, and per-collection locality, all in one pas
 
 ---
 
-## 3. Decision: the record
+## 3. The record
 
-`op = 3` is already reserved ([`store.go:71`](../store.go#L71)) and a reserved op is a
-**hard error** on read ([`store.go:408-412`](../store.go#L408-L412)), so an old binary
-meeting an updated file fails loudly instead of silently serving stale documents. No
-format change is needed.
+`op = 3` is a replace and `op = 2` is a delete ([`store.go`](../store.go)). Both fit the
+existing framing, so mutation needs no format change. An op a binary does not understand
+is a **hard error** on read rather than a skip, so an older binary meeting a file with
+replaces in it fails loudly instead of silently serving stale documents.
 
-**The payload is the complete new document, not a diff.**
+**A replace payload is the complete new document, not a diff.**
 
 | | full document | diff / patch |
 |---|---|---|
 | record size | full doc every time | small |
 | reading a document | one `ReadAt` | base record + every diff since — or a materialised cache |
 | replay | position-independent | must apply diffs strictly in order |
-| `Update` implementation | `Insert` plus an index fixup | a new subsystem |
+| implementation | `Insert` plus an index fixup | a new subsystem |
 
 The full document wins on everything except bytes written, and bytes-on-disk is exactly
 what compaction exists to reclaim. Diffs would trade a solved problem for an unsolved one.
 
-`op = 2` (delete) is the same shape with an `_id`-only payload and **no new index
+A delete record is the same shape with an `_id`-only payload and **no new index
 entry** — which sounds like a footnote and is not. §6 is entirely about what that
 sentence hides.
 
 ---
 
-## 4. Decision: how the index changes
+## 4. How the in-memory index changes
 
-Three viable shapes. The trade is **cost per update** against **keeping snapshot
-semantics**.
+The index arrays swap in a whole new pair of slices under the write lock
+([`replaceIndex`](../index.go)). Two alternatives were weighed against it; the trade is
+**cost per call** against **keeping snapshot semantics**.
 
-| | cost per `Update` **call** | snapshot isolation | complexity |
+| | cost per **call** | snapshot isolation | complexity |
 |---|---|---|---|
-| **A.** copy both slices, swap under the write lock | O(n) — 12 MB at 1M docs | preserved | ~10 lines |
+| **A.** copy both slices, swap under the write lock — *implemented* | O(n) — 12 MB at 1M docs | preserved | ~10 lines |
 | **B.** chunked slices `[][]int64` | O(√n) — see below | preserved | ~60 lines |
 | **C.** `[]atomic.Pointer[chunk]`, per-chunk atomic store | O(chunk) | **lost** | ~60 lines + memory-model care |
 
-**Recommendation: A for v2.** Two reasons, and the first is the one that matters:
+**A is what the engine does.** Two reasons, and the first is the one that matters:
 
-1. **`Update(filter, update)` is a bulk operation.** It updates every matching document
-   in one call, under one write lock, with **one** index rebuild at the end. Updating
-   1,000 documents costs one 12 MB copy, not a thousand. The O(n) is per *call*, not per
-   document.
-2. A 12 MB memcpy is ≈1 ms at typical memory bandwidth. The default durability mode
-   already pays an `fsync` per write, which is 0.5–2 ms on an SSD. The copy is *the same
-   order of magnitude as a cost the design already accepts.*
+1. **Mutation is filter-based, so it is a bulk operation.** One call, under one write
+   lock, with **one** index rebuild at the end. Updating 1,000 documents costs one 12 MB
+   copy, not a thousand — the O(n) is per *call*, not per document.
+2. A 12 MB memcpy is ≈1 ms at typical memory bandwidth. The default durability mode pays
+   an `fsync` per write, which is 0.5–2 ms on an SSD. The copy is *the same order of
+   magnitude as a cost the design accepts elsewhere.*
 
 It also preserves the immutability rule verbatim rather than weakening it, which is
-exactly the escape hatch design.md §4 already reserved:
+exactly the escape hatch design.md §4 reserves:
 
 > Anything that would violate it — in-place compaction, for instance — has to swap in a
 > whole new pair of slices under the write lock instead.
 
-The pathological case is a tight loop of single-document `Update` calls. If a benchmark
-ever shows that is a real workload, **B** is the answer, and the sizing is worth recording
-now so nobody re-derives it:
+The pathological case is a tight loop of single-document calls. If a benchmark ever shows
+that is a real workload, **B** is the answer, and the sizing is recorded here so nobody
+re-derives it:
 
 > cost(c) = 12c (copy one chunk) + 48n/c (copy two outer slices of 24-byte slice headers).
 > Minimised at c = 2√n. For n = 1M: c ≈ 2000, cost ≈ 48 KB per update — a 250× improvement
@@ -234,39 +282,61 @@ point-in-time view design.md §6 promises as documented behaviour. Not worth it.
 > old array?"* — that is most of the difficulty. In Go the answer is free: a reader's
 > `snapshot` holds a slice header referencing the old array, so the old array is reachable,
 > so it simply is not collected until the last reader drops it. No refcount, no epoch, no
-> `free`. The same reason [`snapshot`](../index.go#L96) needs no cleanup today.
+> `free`. The same reason [`snapshot`](../index.go) needs no cleanup.
 
-### The slot is replaced, not appended
+### The document keeps its position
 
-An update overwrites index slot `i` rather than appending a new one. Two consequences,
-both wanted:
+A replaced document keeps its position `i` in the in-memory index arrays instead of
+gaining a new one at the end. What changes is the *value* stored there: the
+byte offset moves to the end of the file, since that is where the replacement was
+appended. Position in memory fixed, position on disk moved — §2.3 is the same fact seen
+from the other side, which is why the offsets stop ascending.
 
-- **Insertion order is preserved.** An updated document stays where it was in an unsorted
-  query's results, instead of jumping to the end.
+(The write lands in the fresh arrays, so §2.1's rule still holds: the arrays readers are
+holding are never touched.)
+
+Two consequences, both wanted:
+
+- **Insertion order is preserved.** A replaced document stays where it was in an unsorted
+  query's results, instead of jumping to the end — because a scan iterates index
+  positions, not file order. That holds on the strided path, which reads the index; the
+  sequential path walks the file, where the replacement genuinely is at the end. Order is
+  a second reason `dirty` (§2.2) has to force the strided path, alongside correctness
+  about *which* documents come back at all.
 - **`Len()` stays exact** as `len(c.offsets)`, and so does `Count(nil)`, which
-  short-circuits to it at [`collection.go:264-266`](../collection.go#L264-L266). That
-  settles design.md §12's open question *for updates*; §6.3 settles it for deletes, by
-  removing the slot outright rather than tombstoning it.
+  short-circuits to it in [`collection.go`](../collection.go). §6.3 keeps that true for
+  deletes, by removing the slot outright rather than tombstoning it.
+
+### Finding the slot to replace
+
+The write path has to scan for the document it is about to supersede, and it does so
+holding the write lock. It therefore builds its snapshot through `snapshotLocked` rather
+than `snapshot`: Go's `RWMutex` is not reentrant, so taking the read lock while already
+holding the write lock deadlocks rather than failing loudly.
+
+### The idTable needs no work
+
+`_id` is immutable — `Replace` keeps the matched document's `_id` and rejects a
+replacement carrying a different one with `ErrImmutableID` — and the document keeps its
+slot. Every fingerprint in the idTable therefore still maps where it did, so the live
+write path never touches it. §5's cost falls on replay, not here.
 
 ---
 
-## 5. The cost nobody expects: the idTable stops being optional
+## 5. Replay resolves records by `_id`
 
-Worth flagging harder than fragmentation, because it is a real regression in a headline
-number.
+Replay parses **nothing** for an insert ([`store.go`](../store.go)) — that is why `Open`
+is one sequential read plus a CRC pass. To apply a replace or a delete, though, replay
+must know *which slot it supersedes*, and the only stable answer is the `_id`.
 
-Replay today parses **nothing** ([`store.go:365`](../store.go#L365)) — that is why `Open`
-is one sequential read plus a CRC pass. But to apply a replace record, replay must know
-*which slot it supersedes*, and the only stable answer is the `_id`.
+The idTable that answers that question is lazy ([`ensureIDTable`](../index.go)) and most
+workloads never build it. Building it unconditionally would add +24 bytes/doc to the
+12 MB headline figure — a 3× increase — for every database, including ones that never
+mutate anything.
 
-Meanwhile the idTable is deliberately lazy ([`ensureIDTable`](../index.go#L225)) and most
-workloads never build it. Making it unconditional would add +24 bytes/doc to the 12 MB
-headline figure — a 3× increase — for every database, including ones that never update
-anything.
-
-**The compromise:** replay stays parse-free until it meets the **first** `op=2`/`op=3`
-record for a given collection. At that moment it builds that collection's idTable by
-reading back the documents it has already indexed, then continues with cheap lookups.
+**The rule:** replay stays parse-free until it meets the **first** `op=2`/`op=3` record
+for a given collection. At that moment it builds that collection's idTable by reading back
+the documents it has already indexed, then continues with cheap lookups.
 
 ```mermaid
 flowchart TD
@@ -281,14 +351,34 @@ flowchart TD
     G --> A
 ```
 
-- A file that never saw an update pays **nothing** — the property is preserved exactly.
-- A collection that has been updated pays one extra read of its own documents, once, at
-  open.
-- The charge is per *collection*, not per database, so one updated collection does not tax
+- A file that was never mutated pays **nothing** — the parse-free property holds exactly.
+- A mutated collection pays one extra read of its own documents, once, at open.
+- The charge is per *collection*, not per database, so one mutated collection does not tax
   the others.
 
-This is the decision that is genuinely awkward to retrofit, which is why it is written
-down now rather than discovered during implementation.
+Three rules the lazy build drags along with it, each of which is silent corruption rather
+than an error if missed:
+
+- **Inserts after the table exists must be added to it.** Once a collection's idTable has
+  been built part-way through a replay, every later `op=1` for that collection has to go
+  in too, or a replace naming one of those documents cannot resolve. This is the one place
+  the parse-free property genuinely erodes: after the first replace, that collection's
+  inserts get parsed for their `_id` as well. Still nothing for collections that were
+  never mutated.
+- **`WithFastOpen` cannot skip a replace payload.** It skips payloads to save the CRC
+  pass, but a replace record's payload is the only place its `_id` appears — and by the
+  previous rule, so is an insert's once the table is live.
+- **Replay must set `dirty`** (§2.2). Miss it and a reopened database takes the sequential
+  path and serves the superseded version of every document it was asked to replace.
+
+Applying the record itself writes `offsets[i]`/`lengths[i]` **in place**, which is safe
+here and nowhere else: replay runs inside `Open`, before the `DB` is handed to the caller,
+so no snapshot exists and §2.1's rule has nobody to protect. Going through the
+copy-on-write path would copy both arrays once per replace record — O(n·m) to open a file
+holding m of them.
+
+A replace whose `_id` is not in the table means the file disagrees with itself, and
+`Open` reports `ErrCorrupt` rather than guessing.
 
 ---
 
@@ -310,7 +400,7 @@ The obvious objection, and the thing worth getting straight first: if `Delete` j
 the index slot in memory, why touch the file?
 
 Because **memory is derived state, rebuilt from the file on every `Open`**
-([`replay`](../store.go#L307)). Drop the slot in memory only, restart, and replay walks
+([`replay`](../store.go)). Drop the slot in memory only, restart, and replay walks
 the file, finds the original insert record, and the document comes back:
 
 ```
@@ -328,7 +418,7 @@ index:      slot0     slot1     slot2        <- B is back
 
 So the tombstone is **a message to future replays, not to queries.** No running query
 ever reads an `op=2` record; the scan skips it on the `op != opInsert` test that already
-exists at [`scan.go:92`](../scan.go#L92). Its entire job is to make replay reproduce the
+exists at [`scanSequential`](../scan.go). Its entire job is to make replay reproduce the
 deletion — it turns *"the index forgot"* into *"the file records that it was forgotten."*
 
 ### 6.2 What "no new index entry" means
@@ -356,19 +446,18 @@ Two options for the in-memory slot:
 | **remove the slot** — `append(offsets[:i], offsets[i+1:]...)` | O(n) shift | stays `len(offsets)` | free: §4 already copies both arrays per call |
 | **tombstone the slot** — `lengths[i] = 0` | O(1) | needs a separate live counter | dead slots hold 12 B of RAM each until compaction |
 
-**Removing wins**, because §4 already commits to full copy-on-write of both arrays per
-call, so the shift rides along at zero marginal cost. `Len()` stays exactly
+**The slot is removed**, because §4 copies both arrays per call anyway, so the shift
+rides along at zero marginal cost. `Len()` stays exactly
 `len(c.offsets)` and `Count(nil)` keeps its O(1) short-circuit at
-[`collection.go:264-266`](../collection.go#L264-L266). That *resolves* design.md §12's
-open question rather than deepening it.
+[`Count`](../collection.go). That answers design.md §12's question about `Len()`.
 
 **But removing slot `i` shifts every later slot down by one**, and the idTable's
-`positions` array holds slot numbers ([`index.go:130`](../index.go#L130)). Every entry
+`positions` array holds slot numbers ([`idTable.positions`](../index.go)). Every entry
 `> i` is now wrong.
 
 And the obvious repair — clearing that id's slot in the table — is a bug. The table is
 open-addressed with linear probing, and `forEachCandidate` terminates on a zero
-fingerprint ([`index.go:191`](../index.go#L191)):
+fingerprint ([`forEachCandidate`](../index.go)):
 
 ```go
 for t.fingerprints[i] != 0 {
@@ -376,10 +465,10 @@ for t.fingerprints[i] != 0 {
 
 Zero a slot in the middle of a probe chain and every entry *behind* it becomes
 unreachable. Classic linear-probing deletion hazard, and note there is no spare sentinel
-value to use instead: [`fingerprint`](../index.go#L153) already folds `0` to `1`, so `1`
+value to use instead: [`fingerprint`](../index.go) already folds `0` to `1`, so `1`
 is a legitimate fingerprint.
 
-> **Decision: deletes rebuild the idTable from scratch**, alongside the COW rebuild of
+> **Deletes rebuild the idTable from scratch**, alongside the COW rebuild of
 > `offsets`/`lengths`. No in-place table deletion, no sentinel, no probe-chain repair, and
 > it costs nothing extra because the arrays are being rebuilt anyway.
 
@@ -393,7 +482,7 @@ Two phases instead:
 
 ```
 pass 1 — the existing walk:
-    op=1  ->  append slot                        (no parse, exactly as today)
+    op=1  ->  append slot                        (no parse)
     op=3  ->  resolve _id -> i, re-point slot i
     op=2  ->  resolve _id -> i, set lengths[i] = 0     <- mark, do not remove
               and drop the _id from the idTable
@@ -419,7 +508,7 @@ op=1  {"_id":"ord-1", v:2}    ->  slot 1, idTable[ord-1] = 1     <- no duplicate
 ```
 
 The final insert does not trip `ErrDuplicateID`
-([`collection.go:150-158`](../collection.go#L150-L158)) precisely because the tombstone
+([`insertPayload`](../collection.go)) precisely because the tombstone
 removed the idTable entry. **Later record wins, always** — and that is guaranteed by
 there being exactly one append point for the whole database, so every record has an
 unambiguous position in one global order.
@@ -441,7 +530,7 @@ separate safety story for delete.
 The value of this shows up by contrast. An *in-place* delete — zeroing the record, or
 flipping a "live" bit in its 12-byte header — that crashes halfway leaves a record whose
 bytes no longer match its `crc32`, **in the middle of the file**, which hits
-[`store.go:382`](../store.go#L382): `ErrCorrupt`, refuse to open. The failure mode is not
+[`replay`'s checksum check](../store.go): `ErrCorrupt`, refuse to open. The failure mode is not
 "lost one document", it is "the database will not open at all". Appending keeps the
 invariant that **damage can only ever be at the tail**, which is what makes recovery a
 two-line rule instead of a repair algorithm.
@@ -450,14 +539,14 @@ Two limits to state plainly:
 
 - **Single-record atomicity only.** `Delete(filter)` matching 100 documents writes 100
   tombstones; a crash can leave a prefix applied — 60 gone, 40 alive. The same
-  non-guarantee as `InsertMany` ([`store.go:221`](../store.go#L221)). All-or-nothing needs
+  non-guarantee as `InsertMany` ([`appendBatch`](../store.go)). All-or-nothing needs
   the reserved `op=5`/`op=6` pair.
 - **Atomic is not durable.** Under `SyncNever` a `Delete` that returned success can still
   vanish in a crash and the document comes back. Not a bug — the mode's documented trade,
   which is why design.md §6 keeps the two properties in separate rows.
 
 The one ordering rule implementation must honour: **drop the in-memory slot only after
-the append succeeds**, mirroring [`collection.go:167-169`](../collection.go#L167-L169) —
+the append succeeds**, mirroring [`insertPayload`](../collection.go) —
 *"a reader must never see an index entry pointing at a record that was not written."*
 Inverted for delete: a reader must never stop seeing a document whose tombstone failed to
 write.
@@ -514,19 +603,15 @@ Step 4 is why compaction is cheap to write: it is `WalkFile` plus `appendRecord`
 which already exist. Note it rewrites replaces as plain inserts, so a compacted file
 contains no `op=3` records at all and reopens on the parse-free replay path of §5.
 
-### The gotcha worth designing for now
+### In-flight readers hold offsets into the old file
 
-**In-flight readers hold offsets into the old file.** A scan runs with no lock held, for
-possibly seconds, using `snap.offsets` — which after step 7 describe a file that no longer
-exists at that path.
+A scan runs with no lock held, for possibly seconds, using `snap.offsets` — which after
+the swap in step 7 above describe a file that no longer exists at that path.
 
-Today [`snapshot`](../index.go#L84-L89) captures offsets, lengths, size and total, but
-**not the `*os.File`**. It reaches through `c.db.file` at scan time
-([`scan.go:135`](../scan.go#L135)), which after the swap is the *new* file. Old offsets,
-new file — reads land on arbitrary record boundaries.
-
-The fix is one field: `snapshot` captures the `*os.File` too, and scans use `snap.file`.
-Cheap now, invasive later, and it must be decided before compaction ships.
+[`snapshot`](../index.go) therefore captures the `*os.File` alongside the offsets, and
+both scan paths read through `snap.file` rather than reaching for `c.db.file` at scan
+time. Without that, a scan that started before the swap would pair old offsets with the
+new file and land on arbitrary record boundaries.
 
 That is sufficient **on Unix**: `rename(2)` over a path whose old inode is still open
 keeps that inode alive until the last descriptor closes, so in-flight readers finish
@@ -544,87 +629,125 @@ drain. Unresolved, and it is the reason compaction is not a one-afternoon task.
 **Manual `Compact()` only.** No background goroutine, no policy, no tuning knobs. It is
 one exported method the caller schedules.
 
-To make it *actionable*, add one field to `DB`:
+What makes that *actionable* is one field on `DB`:
 
 ```go
 dead int64  // bytes superseded by later records; reset by Compact
 ```
 
-Incremented by `recordHeaderSize + lengths[i]` each time a slot is superseded. One
-integer, no allocation, and it is what lets `nsq stat` print
+Incremented by `recordHeaderSize + lengths[i]` each time a slot is superseded, and exposed
+as `DB.DeadBytes()`. One integer, no allocation, and it is what lets `nsq stat` print
 
 ```
-demo.nsq  312 MB   1,000,000 docs   47% dead   — consider `nsq compact`
+dead        222 bytes (38%)  — consider `nsq compact demo.nsq`
 ```
 
-instead of leaving you to guess. Automatic compaction is a threshold on `dead/size` once
-there are real numbers to set it from; the counter has to exist either way.
+instead of leaving you to guess. `ScanLive(path)` reconstructs the same number from the
+file alone, so `nsq stat` can report it on a database no process has open; it costs an
+extra pass parsing every payload's `_id`, so it runs only when a cheap first pass finds an
+`op=2`/`op=3` record. Automatic compaction is a threshold on `dead/size` once there are
+real numbers to set it from; the counter has to exist either way.
 
 ---
 
 ## 8. The plan
 
-Ordered so each step is independently shippable:
+Ordered so each step is small and testable on its own:
 
-| # | step | touches |
-|---|---|---|
-| 1 | `snapshot` captures the `*os.File`; scans use `snap.file` | `index.go`, `scan.go` |
-| 2 | `db.dead` counter + `nsq stat` reporting | `nosqlite.go`, `cmd/nsq` |
-| 3 | per-collection `dirty` flag; set on first update **or delete**, disables `scanSequential`, cleared by `Compact` | `index.go`, `scan.go` |
-| 4 | `op=3` write path: `Update` = encode + `appendRecord` + full COW index swap | `collection.go`, `index.go` |
-| 5 | replay applies `op=3`, building the idTable on first encounter (§5) | `store.go`, `index.go` |
-| 6 | `op=2` write path: `Delete` = tombstone + slot removal + idTable rebuild (§6.3) | `collection.go`, `index.go` |
-| 7 | replay applies `op=2` by mark-then-compact (§6.4) | `store.go`, `index.go` |
-| 8 | `Compact()` — write-new-and-rename, Unix first | new `compact.go` |
-| 9 | Windows compaction story | `compact.go` |
+| # | step | touches | status |
+|---|---|---|---|
+| 1 | `snapshot` captures the `*os.File`; scans use `snap.file` | `index.go`, `scan.go` | **done** |
+| 2 | `db.dead` counter + `nsq stat` reporting | `nosqlite.go`, `cmd/nsq` | **done** |
+| 3 | per-collection `dirty` flag; set on first replace **or delete**, disables `scanSequential`, cleared by `Compact` | `index.go`, `scan.go` | **done** |
+| 4 | `op=3` write path: `Replace` = encode + `appendRecord` + full COW index swap | `collection.go`, `index.go` | **done** |
+| 5 | replay applies `op=3`, building the idTable on first encounter (§5) | `store.go`, `index.go` | **done** |
+| 6 | `op=2` write path: `Delete` = tombstone + slot removal + idTable rebuild (§6.3) | `collection.go`, `index.go` | |
+| 7 | replay applies `op=2` by mark-then-compact (§6.4) | `store.go`, `index.go` | |
+| 8 | `Compact()` — write-new-and-rename, Unix first | new `compact.go` | |
+| 9 | Windows compaction story | `compact.go` | |
 
 Step 3 is the one that looks optional and is not: without it, steps 4 and 6 ship a
-silently wrong `scanSequential` (§2.2). A `dirty` flag is a blunt instrument — it disables
-the fast path for the whole collection after a single update — but it is one bool and one
-branch, it fails in the safe direction, and `Compact()` clears it. Anything cleverer can
-come after a benchmark says it is needed.
+silently wrong `scanSequential` (§2.2).
 
 Steps 6 and 7 are deliberately separate. The write path can be built and unit-tested
 against a live process before replay knows how to reconstruct a deletion; getting them in
 one commit means debugging both halves at once.
 
+Steps 4 and 5 were not separable in the same way — until replay could apply an `op=3`
+record, a database `Replace` had been called on could not be reopened at all.
+
 ---
 
 ## 9. Open questions
 
-- **Should `Update` be filter-based (`Update(filter, update) (int, error)`) or by id
-  (`UpdateOne(id, doc) error`)?** The filter form matches Mongo and makes the O(n) index
-  copy amortise properly (§4). The id form is trivially cheap but pushes the read-modify-
-  write loop onto the caller, where it will be done wrong. Current lean: **both**, with
-  `UpdateOne` as the primitive and `Update` batching over it under one lock.
-- **Does `Update` accept operators (`$set`, `$inc`) or whole documents only?** Whole
-  documents are simpler and match "the record payload is the full document" (§3).
-  Operators are a second expression language to compile and test. Current lean: whole
-  documents in the first cut; `$set` immediately after, since replace-the-whole-document
-  makes concurrent updates lose data in a way `$set` does not.
 - **Does `Compact()` need to be interruptible?** Compacting a 300 GB file is minutes of
   held write lock. A generational/incremental compactor is a much larger design; the
-  honest v2 answer may be "document that it blocks writes for the duration."
+  honest answer may be "document that it blocks writes for the duration."
 - **Should `nsq compact` exist as a CLI verb** so a database can be compacted without the
   owning process? It is the same code pointed at a closed file, and it composes with
-  `nsq stat`'s dead-byte report.
-- ~~**What does a delete do to `offsets`?**~~ **Resolved in §6.3:** the slot is removed,
-  riding along with the COW copy §4 already performs, and the idTable is rebuilt rather
-  than edited in place. `Len()` stays `len(offsets)`.
+  `nsq stat`'s dead-byte report. `nsq stat` already names it in the hint it prints.
 - **Should deleting a non-existent `_id` write a tombstone?** Writing one is garbage that
   compaction must later collect, for a delete that deleted nothing. Not writing one means
   `Delete` needs the idTable built just to answer "does this exist", which is the expensive
-  path for a no-op. Current lean: **resolve first, write nothing if absent**, and return a
+  path for a no-op. Leaning towards **resolve first, write nothing if absent**, returning a
   count of 0 — the idTable is needed for the delete itself anyway.
-- **Does `Delete` need a `DeleteMany` distinction?** Mongo separates `deleteOne` and
-  `deleteMany` so that a filter matching more than intended cannot quietly wipe a
-  collection. Current lean: follow Mongo, since `Delete(filter)` with a typo'd filter is
-  the one mistake in this API with no undo.
+
+---
+
+### 9.1 The method names
+
+§3 fixes the replace payload as **the complete document, not a diff** — and in Mongo's own
+vocabulary, whole-document is `replaceOne`, not `updateOne`:
+
+| Mongo | payload | this design |
+|---|---|---|
+| `replaceOne(filter, doc)` | whole document, operators forbidden | what §3 describes |
+| `updateOne(filter, {$set: …})` | operators required, a bare document is an error | a later, separate method |
+
+Calling the whole-document operation `Update` would mean either renaming it once `$set`
+arrives, or shipping an `Update` that rejects `$set` forever. `Replace` leaves the name
+free, and `store.go` calls the op code `opReplace`, so the public API and the storage
+layer agree.
+
+The surface:
+
+```go
+func (c *Collection) Replace(filter, doc map[string]any) (int, error)  // at most 1
+func (c *Collection) Delete(filter map[string]any) (int, error)        // at most 1
+func (c *Collection) DeleteMany(filter map[string]any) (int, error)    // all matches
+```
+
+Two properties this shape buys:
+
+- **Filter-based, not id-based.** §4's O(n) copy-on-write index swap only amortises if one
+  call can touch many documents; an id-only primitive would pay it per document.
+- **The dangerous operation is the one you have to type more to get.** Mongo splits
+  `deleteOne`/`deleteMany` precisely so a filter matching more than intended cannot
+  quietly wipe a collection, and that is the one mistake in this API with no undo.
+
+**There is no `ReplaceMany`,** and the symmetry with `Insert`/`InsertMany` is what makes
+that look wrong. `InsertMany(docs)` takes *many documents*; `ReplaceMany(filter, doc)`
+would take **one** document and apply it to many matches, leaving them byte-identical
+apart from their `_id`. It also forces an incoherent `_id` rule: `Replace` keeps the
+matched document's `_id` and rejects a conflicting one with `ErrImmutableID`, but across
+many matches a supplied `_id` could not be honoured for more than one of them, so
+`ReplaceMany` would have to silently ignore the field its single-document sibling
+validates. MongoDB omits `replaceMany` for the same reason. Changing a field across many
+documents is `Update(filter, {$set: …})`, which the naming above keeps free. `DeleteMany`
+has no such problem: deleting many documents is one coherent operation.
+
+So: **`Many` is for operations whose plural form is genuinely one operation, not for
+symmetry.**
+
+The **general rule** behind all of this: *Mongo's query language, Go's API shape.*
+Anything the caller writes as **data** — filters, operators — is Mongo dialect verbatim
+(`internal/engine/compile.go`). Anything the caller **calls** is idiomatic Go: one `Query`
+struct rather than a fluent `.find().sort().limit()` chain, `ForEach` callbacks rather
+than cursors (design.md §7).
 
 ---
 
 ## See also
 
-- [`file-format.md`](file-format.md) — the format as it is today, and §7's reserved
-  extension points
+- [`file-format.md`](file-format.md) — the record format and its reserved extension points
 - [`design.md`](design.md) §4 (the immutability rule), §11 (roadmap), §12 (open questions)

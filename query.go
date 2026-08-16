@@ -71,7 +71,7 @@ type Matcher = engine.Matcher
 // CompileFilter turns a filter document into a Matcher tree.
 //
 // It is exported because it is useful on its own — for validating a filter
-// before running it, and eventually as the input to an index planner.
+// before running it, and as the input an index planner would need.
 func CompileFilter(filter map[string]any) (Matcher, error) {
 	return engine.CompileFilter(filter)
 }

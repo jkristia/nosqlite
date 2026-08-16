@@ -3,7 +3,7 @@
 An embedded document store in Go, in the spirit of SQLite: no server, no daemon, one file
 on disk, linked directly into the host process.
 
-**v1 supports exactly two operations: insert and query** (filter / sort / skip / limit).
+**Supported today: insert, query** (filter / sort / skip / limit) **and replace.**
 Everything else is deferred — but each deferred feature has a named extension point
 below, so adding it is additive rather than a rewrite.
 
@@ -29,7 +29,8 @@ aren't yet familiar; this document assumes them.
 
 **Non-goals for v1** — deliberately, not accidentally:
 
-- Updates, deletes, projections, aggregation.
+- Deletes, projections, aggregation. Replace exists and is whole-document; the space a
+  superseded record holds is not reclaimed, because compaction does not exist yet.
 - Secondary indexes (all queries are full scans; §5 says how indexes slot in). This is
   the price of the memory target: queries are I/O- and parse-bound until indexes land.
 - Transactions, multi-document atomicity.
@@ -123,16 +124,16 @@ bytes are zero and are validated as zero, so they can be claimed later without a
   append-only stream and there is exactly one append point in the whole database.
 - **`op`**:
 
-  | op | meaning | in v1 |
+  | op | meaning | supported |
   | --- | --- | --- |
   | 1 | insert — payload is the document | yes |
   | 4 | define collection — payload is `{"id":7,"name":"users"}` | yes |
+  | 3 | replace — payload is the new document | yes |
   | 2 | delete tombstone — payload is the `_id` | reserved |
-  | 3 | replace — payload is the new document | reserved |
   | 5 / 6 | begin / commit, for multi-document atomicity | reserved |
 
-  Reserving the values now is what keeps every roadmap item in §11 a pure append rather
-  than a format change. An unknown op is a hard error on read, never a skip, so an old
+  Reserving the values is what keeps every roadmap item in §11 a pure append rather
+  than a format change — replace landed without touching the format at all. An unknown op is a hard error on read, never a skip, so an old
   binary fails loudly against a newer file instead of silently ignoring deletes.
 - **`flags`** is zero in v1 and validated as zero. It is where per-record concerns go —
   a compression bit is the obvious first claim.
@@ -746,12 +747,30 @@ A real cursor only becomes necessary for streaming across the C ABI, which is a 
 foreclose them:
 
 ```go
-func (c *Collection) Update(filter, update map[string]any) (int, error)  // op=3 records
-func (c *Collection) Delete(filter map[string]any) (int, error)          // op=2 tombstones
-func (c *Collection) Compact() error                                     // rewrite live records
+func (c *Collection) Delete(filter map[string]any) (int, error)           // op=2 tombstones
+func (c *Collection) DeleteMany(filter map[string]any) (int, error)
+func (c *Collection) Update(filter, update map[string]any) (int, error)   // later: $set, $inc
+func (db *DB) Compact() error                                            // rewrite live records
 func (c *Collection) EnsureIndex(field string) error                     // planner in §5
 // Query.Project map[string]any
 ```
+
+Already present:
+
+```go
+// Whole-document write, so Mongo's name for it is Replace, not Update — see
+// updates-and-compaction.md §9.1. It caps at one document, and there is
+// deliberately no ReplaceMany (§8.1 of that doc).
+func (c *Collection) Replace(filter, doc map[string]any) (int, error)  // op=3 records
+
+func (db *DB) DeadBytes() int64  // bytes held by records a later replace superseded
+func (db *DB) Size() int64
+func ScanLive(path string) (LiveStats, error)  // the same accounting, offline
+```
+
+`Replace` leaves the superseded record in the file. Nothing reclaims that space yet —
+`Compact` is step 8 of updates-and-compaction.md §8 — so a database that is replaced in
+repeatedly grows without bound.
 
 ---
 
@@ -989,9 +1008,13 @@ refuses to open the database at all.
 
 Ordered, each pointing at the extension point left for it:
 
-1. **Update and delete** — `op = 2/3` records (§3) plus `Compact()` to rewrite the file
+1. **Replace and delete** — `op = 2/3` records (§3) plus `Compact()` to rewrite the file
    keeping only live versions, regrouped by collection so scan locality is restored.
-   `DropCollection` falls out of the same machinery. No format change.
+   `DropCollection` falls out of the same machinery. No format change. Designed in full in
+   [updates-and-compaction.md](updates-and-compaction.md); steps 1-5 are built — snapshot
+   captures the file handle, the `dead` byte counter, the per-collection `dirty` flag,
+   `Collection.Replace`, and replay of the `op=3` records it writes. Delete and `Compact`
+   remain.
 2. **Secondary indexes** — a planner walking the Matcher tree (§5) to turn `cmpNode` /
    `inNode` on an indexed field into a lookup, with the rest as a residual filter.
    Indexes rebuild from the log on open; nothing new on disk.

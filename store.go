@@ -61,14 +61,14 @@ const (
 	maxPayloadSize = 64 << 20 // 64 MB
 )
 
-// Record operation codes. Values 2, 3, 5 and 6 are *reserved*: v1 never writes
-// them, and reading one is a hard error rather than a skip, so an old binary
+// Record operation codes. Values 2, 5 and 6 are *reserved*: nothing writes them
+// yet, and reading one is a hard error rather than a skip, so an old binary
 // fails loudly against a file written by a newer one instead of silently
 // ignoring its deletes.
 const (
 	opInsert           uint8 = 1 // payload is the document JSON
 	opDelete           uint8 = 2 // reserved: payload would be the _id
-	opReplace          uint8 = 3 // reserved: payload would be the new document
+	opReplace          uint8 = 3 // payload is the new document, in full
 	opDefineCollection uint8 = 4 // payload is {"id":7,"name":"users"}
 	opBegin            uint8 = 5 // reserved: multi-document atomicity
 	opCommit           uint8 = 6 // reserved: multi-document atomicity
@@ -358,11 +358,21 @@ func (db *DB) replay(fileSize int64) error {
 
 		// Read (or skip) the payload.
 		//
-		// Define-collection records are always read: we need their contents.
-		// Under WithFastOpen everything else is skipped without a CRC check,
-		// except the final record, which still gets checked so torn-tail
-		// recovery keeps working.
-		mustRead := !db.cfg.fastOpen || op == opDefineCollection || isLast
+		// Define-collection records are always read: we need their contents. So
+		// are replaces, whose whole job is to name an _id. Under WithFastOpen
+		// everything else is skipped without a CRC check, except the final
+		// record, which still gets checked so torn-tail recovery keeps working.
+		mustRead := !db.cfg.fastOpen || isLast ||
+			op == opDefineCollection || op == opReplace
+		if !mustRead && op == opInsert {
+			// An insert into a collection whose idTable has already been built
+			// has to go into that table, which means knowing its _id, which
+			// means reading it. Only collections that have been mutated pay
+			// this — see the lazy-build rule below.
+			if c, ok := db.byID[coll]; ok && c.ids != nil {
+				mustRead = true
+			}
+		}
 		if mustRead {
 			if cap(payload) < int(length) {
 				payload = make([]byte, length)
@@ -405,7 +415,33 @@ func (db *DB) replay(fileSize int64) error {
 			// header, so a read is one ReadAt with no header parsing.
 			c.appendIndex(off+recordHeaderSize, length)
 			db.total++
-		case opDelete, opReplace, opBegin, opCommit:
+
+			// Once this collection's idTable exists, every later insert must go
+			// into it, or a subsequent replace naming this document would fail
+			// to resolve. The table only exists at all once a replace has been
+			// seen, so a collection that is never mutated never gets here.
+			if c.ids != nil {
+				id, err := payloadID(payload)
+				if err != nil {
+					return fmt.Errorf("%w: insert at %d has undecodable payload: %v",
+						ErrCorrupt, off, err)
+				}
+				if id != "" {
+					c.ids.insert(fingerprint(id), uint32(len(c.offsets)-1))
+				}
+			}
+
+		case opReplace:
+			c, ok := db.byID[coll]
+			if !ok {
+				return fmt.Errorf("%w: replace at %d names undefined collection id %d",
+					ErrCorrupt, off, coll)
+			}
+			if err := db.applyReplay(c, off, length, payload); err != nil {
+				return err
+			}
+
+		case opDelete, opBegin, opCommit:
 			return fmt.Errorf("nosqlite: record at %d uses %s, which this version does not support "+
 				"(file written by a newer nosqlite?)", off, opName(op))
 		default:
@@ -416,6 +452,61 @@ func (db *DB) replay(fileSize int64) error {
 	}
 
 	db.size = off
+	return nil
+}
+
+// applyReplay applies one op=3 record during replay: it repoints the index at
+// the new version of the document the record names.
+//
+// This is where replay stops being parse-free. Resolving *which* document a
+// replace supersedes has only one stable answer — the `_id` — so the collection
+// needs its idTable, and building it means reading back the documents indexed so
+// far. The cost is paid once per collection, on the first replace, and a
+// collection that was never mutated never pays it at all.
+//
+// Called only from replay, which runs inside Open before any other goroutine can
+// reach this DB.
+func (db *DB) applyReplay(c *Collection, off int64, length uint32, payload []byte) error {
+	id, err := payloadID(payload)
+	if err != nil {
+		return fmt.Errorf("%w: replace at %d has undecodable payload: %v", ErrCorrupt, off, err)
+	}
+	if id == "" {
+		return fmt.Errorf("%w: replace at %d names no _id", ErrCorrupt, off)
+	}
+
+	// No-op after the first replace for this collection.
+	if err := c.ensureIDTable(); err != nil {
+		return err
+	}
+	pos, found, err := c.lookupID(id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		// Every replace was written against a document that existed at the
+		// time, and nothing removes an _id from the table, so a miss means the
+		// file disagrees with itself.
+		return fmt.Errorf("%w: replace at %d names _id %q, which %s does not contain",
+			ErrCorrupt, off, id, c.name)
+	}
+
+	db.dead += recordHeaderSize + int64(c.lengths[pos])
+
+	// Assigning in place is safe here and nowhere else: replay runs before the
+	// DB is handed to the caller, so no snapshot exists and the immutability
+	// rule in index.go has nobody to protect. Going through replaceIndex would
+	// copy both arrays once per replace record — O(n·m) to open a file with m of
+	// them.
+	c.offsets[pos] = off + recordHeaderSize
+	c.lengths[pos] = length
+
+	// The _id and the position are both unchanged, so the idTable still maps
+	// correctly and needs no update.
+
+	// The file now holds records this collection's index does not point at, so
+	// the sequential scan path is no longer equivalent to the index.
+	c.dirty = true
 	return nil
 }
 
@@ -558,4 +649,101 @@ func DecodeCollectionRecord(payload []byte) (id uint16, name string, err error) 
 		return 0, "", err
 	}
 	return def.ID, def.Name, nil
+}
+
+// ---------------------------------------------------------------------------
+// Offline live/dead analysis
+// ---------------------------------------------------------------------------
+
+// LiveStats is what an offline pass over a database file can say about which of
+// its records are still current.
+//
+// Both maps are keyed by collection id, the same small integer that appears in
+// every record header and in `nsq dump` output. Use DecodeCollectionRecord on
+// the op=4 records to turn those ids into names.
+type LiveStats struct {
+	Documents map[uint16]int   // live documents per collection
+	Bytes     map[uint16]int64 // on-disk bytes those live documents occupy
+	Dead      int64            // bytes held by superseded records and delete tombstones
+}
+
+// ScanLive walks a database file and reports which records are still live.
+//
+// This is the offline counterpart to DB.DeadBytes: the open database keeps a
+// running counter as it supersedes records, whereas this reconstructs the same
+// number from the file alone, so it works on a database no process has open.
+//
+// It costs more than WalkFile because the answer is only knowable by _id — a
+// replace supersedes whichever earlier record carried the same _id, and nothing
+// in the record header says which one that is, so every payload has to be
+// parsed far enough to read its _id. On a file with no replaces or deletes the
+// answer is simply "everything is live", which WalkFile alone can already tell
+// you; callers that care about the cost should check for op=2/op=3 records first
+// and skip this entirely.
+//
+// Records that fail their CRC are ignored rather than guessed at; use `nsq
+// verify` to find those.
+func ScanLive(path string) (LiveStats, error) {
+	stats := LiveStats{
+		Documents: map[uint16]int{},
+		Bytes:     map[uint16]int64{},
+	}
+	// coll -> _id -> on-disk size of the record currently live for that _id.
+	live := map[uint16]map[string]int64{}
+
+	_, err := WalkFile(path, func(r RawRecord) error {
+		if !r.CRCOK {
+			return nil
+		}
+		switch r.Op {
+		case opDefineCollection:
+			// Make sure an empty collection still shows up with a zero count.
+			if id, _, err := DecodeCollectionRecord(r.Payload); err == nil {
+				if _, seen := live[id]; !seen {
+					live[id] = map[string]int64{}
+				}
+			}
+			return nil
+		case opInsert, opDelete, opReplace:
+		default:
+			return nil
+		}
+
+		id, err := payloadID(r.Payload)
+		if err != nil || id == "" {
+			return nil
+		}
+
+		byID := live[r.Coll]
+		if byID == nil {
+			byID = map[string]int64{}
+			live[r.Coll] = byID
+		}
+		// Whatever this _id pointed at until now is garbage from here on.
+		if prev, ok := byID[id]; ok {
+			stats.Dead += prev
+		}
+		if r.Op == opDelete {
+			// The tombstone carries no live document, and compaction drops it
+			// too, so it is garbage the moment it is written.
+			stats.Dead += r.Total()
+			delete(byID, id)
+		} else {
+			byID[id] = r.Total()
+		}
+		return nil
+	})
+	if err != nil {
+		return LiveStats{}, err
+	}
+
+	for coll, byID := range live {
+		stats.Documents[coll] = len(byID)
+		var total int64
+		for _, size := range byID {
+			total += size
+		}
+		stats.Bytes[coll] = total
+	}
+	return stats, nil
 }

@@ -16,10 +16,15 @@
 //	    Limit:  10,
 //	})
 //
-// # v1 scope
+// # Scope
 //
-// Exactly two operations: insert and query (filter / sort / skip / limit).
-// No updates, deletes, projections or secondary indexes — see docs/design.md.
+// Insert, query (filter / sort / skip / limit), and Replace. No deletes,
+// projections or secondary indexes yet — see docs/design.md.
+//
+// Replace appends a new record and leaves the old one in the file; the space it
+// holds is reported by DB.DeadBytes and reclaimed only by compaction, which is
+// not implemented. A database that is replaced in repeatedly therefore grows
+// without bound.
 //
 // # Numbers are float64
 //
@@ -69,6 +74,13 @@ var (
 	// ErrDuplicateID is returned when inserting a caller-supplied _id that
 	// already exists in the collection.
 	ErrDuplicateID = errors.New("nosqlite: duplicate _id")
+
+	// ErrImmutableID is returned by Replace when the replacement document
+	// carries an _id different from the one it would replace. A document's _id
+	// is fixed for its lifetime: change it and every index entry, id table slot
+	// and reference elsewhere in the database would be talking about a document
+	// that no longer answers to that name. Delete and Insert instead.
+	ErrImmutableID = errors.New("nosqlite: _id is immutable")
 
 	// ErrNotDatabase is returned by Open when the file exists but is not a
 	// nosqlite database (bad magic bytes).
@@ -225,6 +237,15 @@ type DB struct {
 	nextID  uint16                 // next collection id to hand out; ids start at 1
 	total   int                    // total insert records in the whole file
 
+	// dead is how many bytes of the file are occupied by records that a later
+	// replace or delete has superseded, plus the delete tombstones themselves.
+	// Compact reclaims exactly this much and resets the counter to zero.
+	//
+	// One integer, incremented by recordHeaderSize+lengths[i] whenever a slot is
+	// superseded, is what turns "should I compact?" from a guess into a number
+	// (see nsq stat). Guarded by mu.
+	dead int64
+
 	needSync bool // true when SyncNever has buffered writes not yet fsynced
 	closed   bool
 
@@ -314,6 +335,25 @@ func Open(path string, opts ...Option) (*DB, error) {
 
 // Path returns the database file path this DB was opened with.
 func (db *DB) Path() string { return db.path }
+
+// DeadBytes returns how many bytes of the file are held by records that a later
+// replace or delete superseded. Compact reclaims them; nothing else does.
+//
+// It is always 0 until replace and delete exist, and 0 immediately after a
+// Compact. Comparing it against Size is the signal for whether compaction is
+// worth running — see `nsq stat`, which reports the same ratio offline.
+func (db *DB) DeadBytes() int64 {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.dead
+}
+
+// Size returns the current size of the database file in bytes, from memory.
+func (db *DB) Size() int64 {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	return db.size
+}
 
 // Close flushes anything outstanding and closes the file. It is safe to call
 // more than once; later calls are no-ops.

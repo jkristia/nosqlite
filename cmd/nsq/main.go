@@ -122,6 +122,7 @@ func cmdStat(args []string) error {
 	counts := map[uint16]int{}
 	bytes := map[uint16]int64{}
 	var records, bad int
+	var superseded bool
 
 	header, err := nosqlite.WalkFile(path, func(r nosqlite.RawRecord) error {
 		records++
@@ -140,11 +141,30 @@ func cmdStat(args []string) error {
 		case 1: // insert
 			counts[r.Coll]++
 			bytes[r.Coll] += r.Total()
+		case 2, 3: // delete, replace
+			// Some record earlier in the file is now garbage, and the counts
+			// this pass is accumulating are counting it as live. Both need the
+			// second pass below.
+			superseded = true
 		}
 		return nil
 	})
 	if err != nil {
 		return err
+	}
+
+	// Only files that actually contain replaces or deletes pay for resolving
+	// live-versus-dead, which needs every payload's _id parsed.
+	var dead int64
+	if superseded {
+		live, err := nosqlite.ScanLive(path)
+		if err != nil {
+			return err
+		}
+		dead = live.Dead
+		for id := range counts {
+			counts[id], bytes[id] = live.Documents[id], live.Bytes[id]
+		}
 	}
 
 	fmt.Printf("file        %s\n", path)
@@ -154,6 +174,16 @@ func cmdStat(args []string) error {
 	fmt.Printf("records     %d\n", records)
 	if bad > 0 {
 		fmt.Printf("bad crc     %d  (run `nsq verify %s`)\n", bad, path)
+	}
+	if dead > 0 {
+		pct := float64(dead) * 100 / float64(info.Size())
+		line := fmt.Sprintf("dead        %d bytes (%.0f%%)", dead, pct)
+		// The threshold is a hint, not a policy: compaction rewrites the whole
+		// file, so it is only worth it once there is real space to win back.
+		if pct >= 25 {
+			line += fmt.Sprintf("  — consider `nsq compact %s`", path)
+		}
+		fmt.Println(line)
 	}
 	fmt.Printf("collections %d\n", len(names))
 

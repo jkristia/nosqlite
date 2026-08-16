@@ -181,6 +181,174 @@ func (c *Collection) insertPayload(payload []byte, id string, supplied bool) (st
 	return id, nil
 }
 
+// Replace swaps the first document matching filter for doc, and returns how
+// many documents were replaced — 1, or 0 when nothing matched.
+//
+// "First" means insertion order, the same order FindOne uses. There is
+// deliberately no ReplaceMany: replacing several documents with one whole
+// document would leave them identical apart from their _id, which is almost
+// never what anyone means. MongoDB omits it for the same reason.
+//
+// The replacement is a WHOLE document, not a patch: fields absent from doc are
+// gone afterwards. doc need not carry an _id — the replaced document's own _id
+// is kept either way — but if it does, it must match, or ErrImmutableID is
+// returned and nothing is written.
+//
+// On disk this appends a new record and leaves the old one exactly where it is;
+// the space it occupies is reported by DB.DeadBytes and reclaimed only by
+// Compact.
+func (c *Collection) Replace(filter, doc map[string]any) (int, error) {
+	if doc == nil {
+		return 0, errors.New("nosqlite: Replace: document is nil")
+	}
+	// Compile and validate before taking the lock: a bad filter or a bad _id
+	// should cost no one else any waiting.
+	matcher, err := CompileFilter(filter)
+	if err != nil {
+		return 0, err
+	}
+	suppliedID, err := documentID(doc)
+	if err != nil {
+		return 0, fmt.Errorf("nosqlite: Replace: %w", err)
+	}
+
+	started := time.Now()
+
+	db := c.db
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.closed {
+		return 0, ErrClosed
+	}
+
+	pos, err := c.findFirstLocked(matcher)
+	if err != nil {
+		return 0, err
+	}
+	if pos < 0 {
+		db.traceReplace(c.name, "", 0, 0, nil, started, nil)
+		return 0, nil
+	}
+
+	// The replaced document's own _id wins; a supplied one may only agree.
+	id, err := c.idAt(pos)
+	if err != nil {
+		return 0, err
+	}
+	if suppliedID != "" && suppliedID != id {
+		err := fmt.Errorf("%w: the matched document is %q, not %q", ErrImmutableID, id, suppliedID)
+		db.traceReplace(c.name, id, 0, 0, nil, started, err)
+		return 0, err
+	}
+
+	payload, err := encodeReplacement(doc, id)
+	if err != nil {
+		return 0, err
+	}
+
+	off, total, err := db.appendRecord(opReplace, c.id, payload)
+	if err != nil {
+		db.traceReplace(c.name, id, 0, 0, nil, started, err)
+		return 0, err
+	}
+
+	// Order matters: read the old length for the dead-byte count before the
+	// slot is repointed away from it.
+	db.dead += recordHeaderSize + int64(c.lengths[pos])
+	c.replaceIndex(pos, off+recordHeaderSize, uint32(len(payload)))
+
+	// From here on this collection has records in the file that the index no
+	// longer points at, so scanSequential — which re-derives membership from the
+	// file — would hand back the superseded document. See scan.go.
+	c.dirty = true
+
+	// The id table needs no work at all: the _id cannot change and the document
+	// keeps its slot, so every fingerprint still maps where it did. That is a
+	// direct consequence of _id being immutable, not a coincidence.
+	//
+	// db.total is likewise left alone. It counts documents, not records, and a
+	// replace adds no document — it only makes the file longer than the
+	// document count implies, which costs the read-shape heuristic a little
+	// accuracy for OTHER collections in the same file and nothing at all for
+	// this one, which is now pinned to the strided path.
+
+	if err := db.syncIfNeeded(); err != nil {
+		db.traceReplace(c.name, id, off, total, payload, started, err)
+		return 0, err
+	}
+
+	db.traceReplace(c.name, id, off, total, payload, started, nil)
+	return 1, nil
+}
+
+// findFirstLocked returns the index position of the first document matching m,
+// or -1 if none does.
+//
+// It scans exactly as a query would, but with db.mu already held for writing,
+// so it goes through snapshotLocked rather than snapshot.
+//
+// The position it returns is an index position in both read shapes: strided
+// visits index entries directly, and sequential's counter only agrees with the
+// index while the two are in step — which is precisely the condition under
+// which sequential is allowed to run at all.
+//
+// Caller must hold db.mu.
+func (c *Collection) findFirstLocked(m Matcher) (int, error) {
+	pos := -1
+	scratch := make(map[string]any)
+
+	err := c.scanRecords(c.snapshotLocked(), func(i int, payload []byte) (bool, error) {
+		clear(scratch)
+		if err := json.Unmarshal(payload, &scratch); err != nil {
+			return false, fmt.Errorf("nosqlite: decoding document in %s: %w", c.name, err)
+		}
+		if m.Match(scratch) {
+			pos = i
+			return false, nil // found it; stop
+		}
+		return true, nil
+	})
+	if err != nil {
+		return -1, err
+	}
+	return pos, nil
+}
+
+// documentID returns the _id doc carries, or "" when it has none. It is an
+// error for _id to be present but not a usable string.
+func documentID(doc map[string]any) (string, error) {
+	raw, present := doc["_id"]
+	if !present {
+		return "", nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("_id must be a string, got %T", raw)
+	}
+	if s == "" {
+		return "", errors.New("_id must not be empty")
+	}
+	return s, nil
+}
+
+// encodeReplacement marshals doc with its _id forced to id.
+//
+// Like encodeDocument it never modifies the caller's map, copying it when the
+// _id has to be added or corrected.
+func encodeReplacement(doc map[string]any, id string) ([]byte, error) {
+	copied := make(map[string]any, len(doc)+1)
+	for k, v := range doc {
+		copied[k] = v
+	}
+	copied["_id"] = id
+
+	payload, err := json.Marshal(copied)
+	if err != nil {
+		return nil, fmt.Errorf("nosqlite: encoding replacement: %w", err)
+	}
+	return payload, nil
+}
+
 // encodeDocument validates the document's _id (generating one if absent) and
 // marshals it to JSON.
 //
@@ -188,16 +356,12 @@ func (c *Collection) insertPayload(payload []byte, id string, supplied bool) (st
 // copy is made first. (Nested values are shared with the caller's map, but they
 // are only read, and the result of the marshal is an independent byte slice.)
 func encodeDocument(doc map[string]any) (payload []byte, id string, supplied bool, err error) {
-	raw, present := doc["_id"]
-	if present {
-		s, ok := raw.(string)
-		if !ok {
-			return nil, "", false, fmt.Errorf("nosqlite: _id must be a string, got %T", raw)
-		}
-		if s == "" {
-			return nil, "", false, errors.New("nosqlite: _id must not be empty")
-		}
-		id, supplied = s, true
+	id, err = documentID(doc)
+	if err != nil {
+		return nil, "", false, fmt.Errorf("nosqlite: %w", err)
+	}
+	if id != "" {
+		supplied = true
 	} else {
 		id, err = newID()
 		if err != nil {

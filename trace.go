@@ -213,6 +213,26 @@ func (db *DB) traceInsert(coll, id string, off int64, total int, payload []byte,
 	db.trace.emit(seq, "INSERT", coll, details, time.Since(started), err)
 }
 
+// traceReplace reports one replace. A call that matched nothing is still worth
+// a line — "the update did nothing" is a common enough surprise that seeing it
+// in the trace is the whole point.
+func (db *DB) traceReplace(coll, id string, off int64, total int, payload []byte,
+	started time.Time, err error) {
+
+	if !db.trace.enabled(TraceWrites) {
+		return
+	}
+	seq := db.trace.next()
+	details := "matched=0"
+	if id != "" {
+		details = fmt.Sprintf("_id=%s off=%d len=%d", id, off, total)
+		if db.trace.enabled(TraceVerbose) && payload != nil {
+			details += " doc=" + truncateForTrace(string(payload), 512)
+		}
+	}
+	db.trace.emit(seq, "REPLACE", coll, details, time.Since(started), err)
+}
+
 func (db *DB) traceInsertMany(coll string, count int, off int64, total int,
 	started time.Time, err error) {
 
