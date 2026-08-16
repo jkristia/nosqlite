@@ -105,6 +105,12 @@ func TestFilterOperators(t *testing.T) {
 		{"$not", map[string]any{"$not": map[string]any{"age": map[string]any{"$gte": 41}}}, []string{"Ada", "Barbara"}},
 		{"field-level $not", map[string]any{"age": map[string]any{"$not": map[string]any{"$gte": 41}}}, []string{"Ada", "Barbara"}},
 		{"eq null matches null, not missing", map[string]any{"age": nil}, []string{"Barbara"}},
+		{"regex as plain substring", map[string]any{"name": map[string]any{"$regex": "ac"}}, []string{"Grace"}},
+		{"regex anchored prefix", map[string]any{"name": map[string]any{"$regex": "^A"}}, []string{"Ada", "Alan"}},
+		{"regex case-insensitive via inline flag", map[string]any{"name": map[string]any{"$regex": "(?i)ada"}}, []string{"Ada"}},
+		{"regex is case-sensitive by default", map[string]any{"name": map[string]any{"$regex": "ada"}}, []string{}},
+		{"regex over an array field matches per element", map[string]any{"tags": map[string]any{"$regex": "^m"}}, []string{"Ada", "Alan"}},
+		{"regex on non-string field never matches", map[string]any{"age": map[string]any{"$regex": "41"}}, []string{}},
 		{"empty filter matches everything", nil, []string{"Ada", "Grace", "Alan", "Edsger", "Barbara"}},
 		// Comparison operators only match within a type: 36 never matches "36".
 		{"no cross-type comparison", map[string]any{"name": map[string]any{"$gte": 0}}, []string{}},
@@ -130,6 +136,8 @@ func TestUnknownOperatorIsAnError(t *testing.T) {
 		{"$nope": []any{}},                    // unknown top-level operator
 		{"age": map[string]any{"$exists": 1}}, // wrong argument type
 		{"a": map[string]any{"$gt": 1, "b": 2}},
+		{"name": map[string]any{"$regex": "("}}, // invalid pattern: unbalanced paren
+		{"name": map[string]any{"$regex": 123}}, // wrong argument type
 	}
 	for _, filter := range bad {
 		if _, err := c.Find(Query{Filter: filter}); err == nil {

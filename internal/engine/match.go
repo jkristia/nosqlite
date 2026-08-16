@@ -6,7 +6,10 @@ package engine
 // A filter is parsed exactly once, before any document is looked at (see
 // compile.go). Then every document in the scan is handed to the same tree.
 
-import "strconv"
+import (
+	"regexp"
+	"strconv"
+)
 
 // Matcher is one node in a compiled filter.
 //
@@ -192,6 +195,47 @@ func (n existsNode) Match(doc map[string]any) bool {
 	// lookupPath returns exactly one absent sentinel when nothing was found.
 	exists := !(len(found) == 1 && isAbsent(found[0]))
 	return exists == n.want
+}
+
+// regexNode implements $regex: the value at path, treated as a string,
+// contains a match for the pattern. regexp.MatchString is unanchored by
+// default — the pattern may match anywhere in the string, not just at the
+// start or across the whole thing — so a plain literal pattern (e.g. "ada")
+// behaves as a case-sensitive substring search — the common case — while the
+// pattern can still use full RE2 syntax, including "^"/"$" to anchor and
+// inline flags like "(?i)" for case-insensitive matching.
+type regexNode struct {
+	path []string
+	re   *regexp.Regexp
+}
+
+func (n regexNode) Match(doc map[string]any) bool {
+	found := lookupPath(doc, n.path)
+	for _, v := range found {
+		if n.matchValue(v) {
+			return true
+		}
+		// Same array rule as cmpNode/inNode: any element counts.
+		if arr, ok := v.([]any); ok {
+			for _, el := range arr {
+				if n.matchValue(el) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// matchValue only ever matches strings; a $regex on a non-string field (or a
+// non-string array element) simply doesn't match, the same way $gt on a
+// string field doesn't match a number.
+func (n regexNode) matchValue(v any) bool {
+	s, ok := v.(string)
+	if !ok {
+		return false
+	}
+	return n.re.MatchString(s)
 }
 
 // ---------------------------------------------------------------------------

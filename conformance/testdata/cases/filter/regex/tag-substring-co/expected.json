@@ -1,0 +1,22 @@
+{
+    "$schema": "../../../expected.schema.json",
+    "ids": ["2", "7", "11", "12", "16", "20", "22", "27", "31", "32", "36", "40", "42", "47", "53"],
+    "fields": ["_id", "age", "name"],
+    "docs": [
+        {"_id": "2", "age": 22, "name": "Ada Andersen"},
+        {"_id": "7", "age": 32, "name": "Emma Rivera"},
+        {"_id": "11", "age": 40, "name": "Sophia Turner"},
+        {"_id": "12", "age": 42, "name": "Sophia Andersen"},
+        {"_id": "16", "age": 50, "name": "Ada Novak"},
+        {"_id": "20", "age": 58, "name": "Noah Chen"},
+        {"_id": "22", "age": 62, "name": "Emma Andersen"},
+        {"_id": "27", "age": 22, "name": "Lucas Rivera"},
+        {"_id": "31", "age": 30, "name": "Maya Turner"},
+        {"_id": "32", "age": 32, "name": "Maya Andersen"},
+        {"_id": "36", "age": 40, "name": "Emma Novak"},
+        {"_id": "40", "age": 48, "name": "Sophia Chen"},
+        {"_id": "42", "age": 52, "name": "Lucas Andersen"},
+        {"_id": "47", "age": 62, "name": "Liam Rivera"},
+        {"_id": "53", "age": 19, "name": "Amir Farouk"}
+    ]
+}

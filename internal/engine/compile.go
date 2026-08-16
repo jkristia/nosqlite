@@ -8,6 +8,7 @@ package engine
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -27,6 +28,7 @@ const (
 	opInS    = "$in"
 	opNinS   = "$nin"
 	opExists = "$exists"
+	opRegexS = "$regex"
 )
 
 // CompileFilter turns a filter document into a Matcher tree.
@@ -199,6 +201,21 @@ func compileOperator(field string, path []string, op string, arg any) (Matcher, 
 			return nil, fmt.Errorf("nosqlite: %s on field %q expects true or false, got %T", op, field, arg)
 		}
 		return existsNode{path: path, want: want}, nil
+
+	case opRegexS:
+		pattern, ok := arg.(string)
+		if !ok {
+			return nil, fmt.Errorf("nosqlite: %s on field %q expects a string pattern, got %T", op, field, arg)
+		}
+		// Go's RE2 syntax: unanchored by default, so a plain literal pattern
+		// (no special characters) behaves as a substring search — the common
+		// case — while inline flags like "(?i)" still give full regex power
+		// when needed.
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("nosqlite: %s on field %q: invalid pattern: %w", op, field, err)
+		}
+		return regexNode{path: path, re: re}, nil
 
 	case opNot:
 		sub, ok := asDocument(arg)

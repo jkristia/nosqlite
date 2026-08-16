@@ -110,6 +110,18 @@ test("tag-all-code-music", () => {
   expect(gotDocs).toEqual(expectedDocs);
 });
 
+test("name-substring-grace", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/regex/name-substring-grace");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("tag-substring-co", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("filter/regex/tag-substring-co");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
 test("has-tags", () => {
   const { got, expected, gotDocs, expectedDocs } = cases.run("filter/exists/has-tags");
   expect(got).toEqual(expected);
