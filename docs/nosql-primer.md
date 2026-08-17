@@ -414,7 +414,9 @@ SQLite.
   implicit AND. This choice is what lets the Go, Python, and TypeScript APIs be
   literally the same filter value, with no translation layer.
 - Sort / skip / limit with an explicitly documented cross-type ordering (§5).
-- Indexes, updates, deletes, projections, and aggregation are **out of scope for v1**,
-  but the design leaves a named place for each.
+- Whole-document **replace** is supported (§4's filter picks the document; the new
+  document overwrites it entirely). Indexes, operator-style updates (`$set`), deletes,
+  projections, and aggregation are **out of scope for v1**, but the design leaves a
+  named place for each.
 
 See [`design.md`](design.md) for how that gets built.

@@ -89,6 +89,9 @@ _lib.nsq_insert.restype = _c_ptr
 _lib.nsq_insert_many.argtypes = [_c_ll, _c_str, _c_str]
 _lib.nsq_insert_many.restype = _c_ptr
 
+_lib.nsq_replace.argtypes = [_c_ll, _c_str, _c_str, _c_str]
+_lib.nsq_replace.restype = _c_ptr
+
 _lib.nsq_find.argtypes = [_c_ll, _c_str, _c_str]
 _lib.nsq_find.restype = _c_ptr
 
@@ -155,6 +158,22 @@ def insert_many(handle: int, collection: str, documents: list[dict[str, Any]]) -
         _utf8(json.dumps(documents)),
     )
     return reply["ids"]
+
+
+def replace(
+    handle: int,
+    collection: str,
+    filter: dict[str, Any] | None,
+    document: dict[str, Any],
+) -> int:
+    reply = _call(
+        _lib.nsq_replace,
+        _c_ll(handle),
+        _utf8(collection),
+        _utf8(json.dumps(filter or {})),
+        _utf8(json.dumps(document)),
+    )
+    return int(reply["replaced"])
 
 
 def find(handle: int, collection: str, query: dict[str, Any]) -> list[dict[str, Any]]:

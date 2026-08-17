@@ -152,6 +152,34 @@ class Collection:
         """
         return _lib.insert_many(self.database.handle, self.name, list(documents))
 
+    def replace(
+        self, filter: dict[str, Any] | None, document: dict[str, Any]
+    ) -> int:
+        """Overwrite the first document matching *filter*, and return how many
+        were replaced -- ``1``, or ``0`` when nothing matched.
+
+        *document* replaces the stored one entirely: fields it omits are gone,
+        this is not a merge. At most one document is touched, so a too-broad
+        filter cannot rewrite the collection.
+
+        ``_id`` is immutable. The replacement keeps the matched document's id,
+        and you may include the same ``_id`` in *document* but not a different
+        one -- that raises :class:`NoSQLiteError`.
+
+        That check is worth reaching for. An ``_id`` in *document* is not a
+        second way to pick the document -- *filter* always picks -- it is an
+        assertion that *filter* found the one you meant, and it costs nothing::
+
+            # Meant document 7, but this filter matches document 8.
+            users.replace({"name": "Emma Osei"}, {"_id": "7", "age": 33})
+            # NoSQLiteError: nosqlite: _id is immutable: the filter matched
+            # document "8", but the replacement carries _id "7"; one of them
+            # is wrong
+
+        Leave the ``_id`` out and that same typo overwrites document 8 silently.
+        """
+        return _lib.replace(self.database.handle, self.name, filter, document)
+
     # -- reading ------------------------------------------------------------
 
     def find(

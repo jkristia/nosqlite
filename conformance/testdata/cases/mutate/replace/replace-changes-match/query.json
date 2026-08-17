@@ -1,0 +1,14 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "The query sees the replacement, not the superseded record: 51 was one of the three age-19 documents and no longer matches after being replaced with age 99.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "replace",
+            "filter": {"_id": "51"},
+            "document": {"name": "Mona Haddad", "age": 99, "gender": "female"},
+            "matched": 1
+        }
+    ],
+    "filter": {"age": {"$lt": 20}}
+}

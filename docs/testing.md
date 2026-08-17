@@ -70,19 +70,64 @@ conformance/
             <dataset-name>.jsonl     # documents to insert, one per line — reused by many cases
         cases/
             <case-name>/
-                query.json           # {"dataset": "<dataset-name>", "filter": ..., "sort": ..., "skip": ..., "limit": ...}
+                query.json           # {"dataset": ..., "mutations": [...], "filter": ..., "sort": ..., "skip": ..., "limit": ...}
                 expected.json        # the result every binding must produce for that query
 ```
 
 A case names its dataset rather than embedding it, so `query.json` stays small and
 readable, and a dataset can gain new cases without being copy-pasted.
 
+**Write behavior is covered by `mutations`.** A case is a *sequence*: seed the
+dataset, apply `mutations` in order, then run the query. The query is how a write
+case makes its assertion — there is no separate "expected database state" file, and
+`expected.json` keeps its one meaning of "what `Find` must return".
+
+```json
+"mutations": [
+  {"op": "replace", "filter": {"_id": "9"}, "document": {"name": "..."}, "matched": 1}
+]
+```
+
+`matched` is an optional assertion on the count the operation returns, checked
+before the query runs — so a case that fails to mutate reports that directly
+instead of as a confusing diff further down.
+
+**Rejected writes are cases too.** A mutation can assert that it *must* fail,
+with `error` in place of `matched`:
+
+```json
+{"op": "replace", "filter": {"name": "Emma Osei"},
+ "document": {"_id": "7", ...},
+ "error": "the filter matched document \"8\", but the replacement carries _id \"7\""}
+```
+
+The text is matched as a **substring**, not compared whole: only the message is
+genuinely shared across the bindings — Go returns an `error`, Python raises
+`NoSQLiteError`, TypeScript throws — so pinning the exact rendering would make the
+fixture a test of three error-reporting conventions instead of one rule. The query
+then runs against the unchanged data, which is how the case proves the refused
+write wrote *nothing*; see `cases/mutate/replace/replace-rejects-mismatched-id`,
+whose query asserts both documents are still intact. `error` and `matched` are
+mutually exclusive (the schema enforces it): a failed operation returns no count.
+
+Omitting `mutations` entirely gives
+the read-only case the suite started with, which is why the existing query cases
+needed no edit when this arrived. An `op` a runner doesn't implement is a hard
+failure, never a skip: a fixture that silently tested nothing would be worse than
+no fixture.
+
+Cases that mutate live under `cases/mutate/<op>/`, keeping them findable as a group
+— they are the ones to look at first when a write path changes.
+
 `query.json` and `expected.json` are hand-authored JSON with no compiler behind
 them, which makes "what am I allowed to put in here" a real question — `filter` in
 particular is the Mongo-dialect grammar from [`matcher.md`](matcher.md), not
 something guessable from the field name alone. Rather than inventing a build step,
-each file declares `"$schema": "../../query.schema.json"` (or `expected.schema.json`)
-as its first key. Editors with a JSON language service (VS Code out of the box) read
+each file declares `"$schema"` as its first key, pointing at `query.schema.json` (or
+`expected.schema.json`) — a relative path, so it carries one `../` per level the case
+sits below `cases/`, plus one more for `cases/` itself. `query.schema.json` also
+accepts an optional `description` on a case, for the ones whose point the directory
+name can't carry. Editors with a JSON language service (VS Code out of the box) read
 that and give real autocomplete, hover docs, and validation — the closest thing to a
 typed interface JSON fixtures can have. `$schema` is ignored by the Go/Python/TS
 readers; it's an editor hint, not part of the data.
@@ -112,8 +157,9 @@ conformance/
 Each suite is **one generic runner**, not one file per case: it walks
 `../testdata/cases/` recursively, and treats any directory containing a
 `query.json` as a case — at any depth. For each one it inserts that case's
-`dataset` (from `../testdata/datasets/`) through the language's public API, runs
-`query.json`, and diffs the result against `expected.json`. `conformance/go/` does
+`dataset` (from `../testdata/datasets/`) through the language's public API, applies
+the case's `mutations` if it has any, runs `query.json`, and diffs the result
+against `expected.json`. `conformance/go/` does
 not mirror `testdata/cases/<name>/` on disk — there is deliberately no
 `conformance/go/age-gte`. If there were, every new case would mean writing a new
 test in Go *and* Python *and* TypeScript, which is exactly the duplication the
@@ -255,5 +301,9 @@ an actual second suite to port, not preemptively.
 - **New filter operator, new query behavior, "does every binding agree"** → a case
   in `conformance/testdata/`, run through `conformance/go`, `conformance/python`,
   `conformance/typescript`.
+- **New write behavior** → the same, as a case under `cases/mutate/` whose
+  `mutations` perform the write and whose query observes it (§3). A new `op` also
+  needs the three runners taught to perform it, and the binding surface to exist in
+  all three languages first.
 - **Large dataset, performance, or stress scenario** → `scale/go` (and the other
   languages once they exist), data in `scale/testdata/`.

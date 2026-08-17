@@ -8,12 +8,14 @@ Python and TypeScript.
 [`docs/getting-started.md`](docs/getting-started.md) is the step-by-step: what to
 install, in what order, and how to tell it worked.
 
-**v1 supports exactly two operations: insert and query** (filter / sort / skip /
-limit). See [`docs/design.md`](docs/design.md) for the full design,
+**v1 supports insert, query** (filter / sort / skip / limit) **and replace** — the
+whole-document overwrite; delete and compaction are still to come. See
+[`docs/design.md`](docs/design.md) for the full design,
 [`docs/file-format.md`](docs/file-format.md) for what is on disk and how a
 collection scans its own records,
-[`docs/updates-and-compaction.md`](docs/updates-and-compaction.md) for how
-update/delete will work once they land, [`docs/matcher.md`](docs/matcher.md) for
+[`docs/updates-and-compaction.md`](docs/updates-and-compaction.md) for how replace
+works on an append-only file and how delete and compaction will,
+[`docs/matcher.md`](docs/matcher.md) for
 how filters compile and match, [`docs/testing.md`](docs/testing.md) for how unit,
 conformance, and scale tests are organized across the three languages, and
 [`docs/nosql-primer.md`](docs/nosql-primer.md) if *collection* and *document* are
@@ -257,7 +259,7 @@ any other module import.
 
 ```
 nosqlite.go        DB, Open, Close, Collection, options
-collection.go      Insert, InsertJSON, InsertMany, Find, FindOne, ForEach, Count
+collection.go      Insert, InsertJSON, InsertMany, Replace, Find, FindOne, ForEach, Count
 store.go           file header, record framing, append, replay, torn-tail recovery
 catalog.go         collection name <-> id
 index.go           offsets/lengths arrays, snapshots, lazy _id table
@@ -343,7 +345,7 @@ sequenceDiagram
 - `ffi.ts` decodes that string, frees it, parses the JSON, returns `id` as a JS `number`
 - `index.ts` stores it in the private field `#handle` — **that integer is the only thing JS ever holds**; the real `*DB` lives entirely on the Go side, keyed by that id
 
-**Every data call — `insert`, `insertMany`, `find`, `count`, `collections`**
+**Every data call — `insert`, `insertMany`, `replace`, `find`, `count`, `collections`**
 [ffi.ts:139-157](typescript/nosqlite/ffi.ts#L139-L157) ·
 [capi.go:248-397](capi/capi.go#L248-L397)
 

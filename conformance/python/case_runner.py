@@ -20,7 +20,7 @@ _TESTDATA_DIR = os.path.join(_REPO_ROOT, "conformance", "testdata")
 
 sys.path.insert(0, os.path.join(_REPO_ROOT, "python"))
 
-from nosqlite import Database  # noqa: E402
+from nosqlite import Database, NoSQLiteError  # noqa: E402
 
 
 @dataclass
@@ -61,6 +61,43 @@ def _to_sort_tuples(sort: list[dict[str, Any]] | None) -> list[tuple[str, int]]:
     return [(s["field"], -1 if s.get("desc") else 1) for s in (sort or [])]
 
 
+def _apply_mutation(docs: Any, i: int, mutation: dict[str, Any]) -> None:
+    """Performs one of a case's mutations.
+
+    An unknown op raises rather than being skipped: a fixture naming an op this
+    runner does not implement would otherwise pass while testing nothing. That
+    check comes before the call so it cannot be mistaken for the failure an
+    ``error`` assertion expects.
+    """
+    op = mutation["op"]
+    if op != "replace":
+        raise AssertionError(f"mutations[{i}]: unknown op {op!r}")
+
+    want_error = mutation.get("error")
+    try:
+        matched = docs.replace(mutation.get("filter") or {}, mutation["document"])
+    except NoSQLiteError as exc:
+        if not want_error:
+            raise
+        if want_error not in str(exc):
+            raise AssertionError(
+                f"mutations[{i}] ({op}): error {str(exc)!r} does not contain {want_error!r}"
+            ) from exc
+        return
+
+    if want_error:
+        raise AssertionError(
+            f"mutations[{i}] ({op}): want an error containing {want_error!r}, "
+            f"got none (matched {matched})"
+        )
+
+    want = mutation.get("matched")
+    if want is not None and matched != want:
+        raise AssertionError(
+            f"mutations[{i}] ({op}) matched {matched} documents, want {want}"
+        )
+
+
 def run_case(name: str) -> CaseResult:
     case_dir = os.path.join(_TESTDATA_DIR, "cases", name)
     query = _read_json(os.path.join(case_dir, "query.json"))
@@ -72,6 +109,9 @@ def run_case(name: str) -> CaseResult:
         with Database(db_path) as db:
             docs = db.collection("docs")
             docs.insert_many(dataset)
+
+            for i, mutation in enumerate(query.get("mutations") or []):
+                _apply_mutation(docs, i, mutation)
 
             # query.json's limit follows the fixture convention (0/omitted =
             # no limit), but find()'s own default of None applies

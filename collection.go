@@ -194,6 +194,11 @@ func (c *Collection) insertPayload(payload []byte, id string, supplied bool) (st
 // is kept either way — but if it does, it must match, or ErrImmutableID is
 // returned and nothing is written.
 //
+// That check is worth reaching for. An _id in doc is not a second way to pick
+// the document — filter always picks — it is an assertion that filter found the
+// one you meant, and it costs nothing. Leave it out and a filter that selects
+// the wrong document overwrites the wrong document, silently and irreversibly.
+//
 // On disk this appends a new record and leaves the old one exactly where it is;
 // the space it occupies is reported by DB.DeadBytes and reclaimed only by
 // Compact.
@@ -236,7 +241,11 @@ func (c *Collection) Replace(filter, doc map[string]any) (int, error) {
 		return 0, err
 	}
 	if suppliedID != "" && suppliedID != id {
-		err := fmt.Errorf("%w: the matched document is %q, not %q", ErrImmutableID, id, suppliedID)
+		// Name both sides and where each came from. The caller's mistake is
+		// almost never "I tried to change an _id" — it is a filter that picked
+		// a document they did not mean, and the message has to say so.
+		err := fmt.Errorf("%w: the filter matched document %q, but the replacement carries _id %q; one of them is wrong",
+			ErrImmutableID, id, suppliedID)
 		db.traceReplace(c.name, id, 0, 0, nil, started, err)
 		return 0, err
 	}

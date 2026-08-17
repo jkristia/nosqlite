@@ -97,6 +97,7 @@ const nsqOpen = lib.func("void *nsq_open(const char *path, const char *opts)");
 const nsqClose = lib.func("void *nsq_close(int64_t handle)");
 const nsqInsert = lib.func("void *nsq_insert(int64_t handle, const char *coll, const char *doc)");
 const nsqInsertMany = lib.func("void *nsq_insert_many(int64_t handle, const char *coll, const char *docs)");
+const nsqReplace = lib.func("void *nsq_replace(int64_t handle, const char *coll, const char *filter, const char *doc)");
 const nsqFind = lib.func("void *nsq_find(int64_t handle, const char *coll, const char *query)");
 const nsqCount = lib.func("void *nsq_count(int64_t handle, const char *coll, const char *filter)");
 const nsqCollections = lib.func("void *nsq_collections(int64_t handle)");
@@ -142,6 +143,16 @@ export function insert(handle: number, collection: string, document: Json): stri
 
 export function insertMany(handle: number, collection: string, documents: Json[]): string[] {
   return call(nsqInsertMany, handle, collection, JSON.stringify(documents)).ids as string[];
+}
+
+export function replace(
+  handle: number,
+  collection: string,
+  filter: Json | null,
+  document: Json,
+): number {
+  const reply = call(nsqReplace, handle, collection, JSON.stringify(filter ?? {}), JSON.stringify(document));
+  return Number(reply.replaced);
 }
 
 export function find(handle: number, collection: string, query: Json): Json[] {

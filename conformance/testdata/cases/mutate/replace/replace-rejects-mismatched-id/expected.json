@@ -1,0 +1,9 @@
+{
+    "$schema": "../../../../expected.schema.json",
+    "ids": ["7", "8"],
+    "fields": ["_id", "name", "email"],
+    "docs": [
+        {"_id": "7", "name": "Emma Rivera", "email": "emma.rivera@example.com"},
+        {"_id": "8", "name": "Emma Osei", "email": "emma.osei@example.com"}
+    ]
+}

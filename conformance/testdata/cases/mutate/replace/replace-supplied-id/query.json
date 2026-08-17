@@ -1,0 +1,26 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "The filter need not name _id — this one matches on name — and the replacement may carry the matched document's own _id.That _id is not a second way to pick the document: the filter always picks, and the _id is an assertion that it found the one you meant. Say you mean document 7 but typo the filter so it matches document 8 — with the _id present that is an error and nothing is written; leave it out and document 8 is overwritten silently. This case is the agreeing half, where filter and _id name the same document and the replace proceeds. The mismatching half is an error, which this fixture format cannot express; see replace_test.go's ErrImmutableID cases.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "replace",
+            "filter": {
+                "name": "Emma Rivera"
+            },
+            "document": {
+                "_id": "7",
+                "name": "Emma Rivera",
+                "age": 33,
+                "gender": "female",
+                "tags": [
+                    "cooking"
+                ]
+            },
+            "matched": 1
+        }
+    ],
+    "filter": {
+        "tags": "cooking"
+    }
+}

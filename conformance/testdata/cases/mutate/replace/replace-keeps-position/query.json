@@ -1,0 +1,15 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "A replaced document keeps its place in insertion order, even though the new record is appended to the end of the file. Replace is not delete-then-insert.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "replace",
+            "filter": {"_id": "3"},
+            "document": {"name": "Maya Patel", "age": 25, "gender": "female"},
+            "matched": 1
+        }
+    ],
+    "filter": {},
+    "limit": 5
+}

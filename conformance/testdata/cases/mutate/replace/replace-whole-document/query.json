@@ -1,0 +1,14 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "A replacement is the whole document, not a merge: the replaced document 9 loses the email field every other document in the dataset has, and gains tags it did not have.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "replace",
+            "filter": {"_id": "9"},
+            "document": {"name": "Olivia Kowalski", "age": 37, "gender": "female", "tags": ["math"]},
+            "matched": 1
+        }
+    ],
+    "filter": {"email": {"$exists": false}}
+}

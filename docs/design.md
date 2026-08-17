@@ -797,6 +797,9 @@ func nsq_insert(h C.longlong, coll, docJSON *C.char) *C.char
 //export nsq_insert_many
 func nsq_insert_many(h C.longlong, coll, docsJSON *C.char) *C.char
                                           // → {"ids":[...]} | {"error":"..."}
+//export nsq_replace
+func nsq_replace(h C.longlong, coll, filterJSON, docJSON *C.char) *C.char
+                                          // → {"replaced":1} | {"error":"..."}
 //export nsq_find
 func nsq_find(h C.longlong, coll, queryJSON *C.char) *C.char
                                           // → {"docs":[...]} | {"error":"..."}
@@ -904,6 +907,9 @@ hasn't — `Database` opens, `db["name"]` gets a collection, the context manager
   (`sort=[("age", -1)]` → `[{"field": "age", "desc": True}]`) and returns a `list[dict]`.
 - `Collection.find_one(filter)` is `find(filter, limit=1)` unwrapped to a single `dict`
   or `None` — Go's `FindOne` needs no C export of its own.
+- `Collection.replace(filter, document)` → `nsq_replace`, returning the number replaced
+  (`0` or `1`). A rejected `_id` change surfaces as `NoSQLiteError`, like any other
+  error the boundary reports.
 - `Database(path, sync="always", trace=None)` passes `{"sync": ..., "trace": ...}` as
   `nsq_open`'s options argument, reaching `WithSync` and `WithTrace` from §7. The
   `NOSQLITE_TRACE` environment variable works from Python too, since it is read on the
@@ -938,7 +944,7 @@ build:
 nosqlite/
 ├── go.mod                      module github.com/<user>/nosqlite
 ├── nosqlite.go                 DB, Open, Close, Collection, Collections, Option/SyncMode
-├── collection.go               Insert, InsertJSON, InsertMany, Find, FindOne, ForEach, Count
+├── collection.go               Insert, InsertJSON, InsertMany, Replace, Find, FindOne, ForEach, Count
 ├── store.go                    file header, record framing, append, replay, torn-tail recovery
 ├── catalog.go                  collection name ↔ id, define-collection records
 ├── index.go                    offsets/lengths arrays, snapshots, lazy idTable

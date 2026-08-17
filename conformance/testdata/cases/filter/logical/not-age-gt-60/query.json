@@ -1,5 +1,5 @@
 {
-    "$schema": "../../../query.schema.json",
+    "$schema": "../../../../query.schema.json",
     "dataset": "people",
     "filter": {"age": {"$not": {"$gt": 60}}}
 }

@@ -133,3 +133,45 @@ test("no-tags", () => {
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
+
+test("replace-whole-document", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/replace/replace-whole-document");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("replace-keeps-position", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/replace/replace-keeps-position");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("replace-changes-match", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/replace/replace-changes-match");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("replace-no-match-is-noop", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/replace/replace-no-match-is-noop");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("replace-supplied-id", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/replace/replace-supplied-id");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("replace-rejects-mismatched-id", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/replace/replace-rejects-mismatched-id");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("replace-twice-last-wins", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/replace/replace-twice-last-wins");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});

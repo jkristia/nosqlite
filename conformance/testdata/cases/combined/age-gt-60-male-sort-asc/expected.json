@@ -1,5 +1,5 @@
 {
-    "$schema": "../../expected.schema.json",
+    "$schema": "../../../expected.schema.json",
     "ids": ["47", "48", "24", "49", "25"],
     "fields": ["_id", "age", "name"],
     "docs": [

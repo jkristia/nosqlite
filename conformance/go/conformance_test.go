@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/jkristia/nosqlite"
@@ -24,14 +25,30 @@ import (
 // caseQuery mirrors nosqlite.Query, but in a JSON-friendly shape: it names a
 // dataset instead of embedding it, so many cases can share one dataset file.
 type caseQuery struct {
-	Dataset string         `json:"dataset"`
-	Filter  map[string]any `json:"filter"`
-	Sort    []struct {
+	Dataset   string         `json:"dataset"`
+	Mutations []caseMutation `json:"mutations"`
+	Filter    map[string]any `json:"filter"`
+	Sort      []struct {
 		Field string `json:"field"`
 		Desc  bool   `json:"desc"`
 	} `json:"sort"`
 	Skip  int `json:"skip"`
 	Limit int `json:"limit"`
+}
+
+// caseMutation is one write applied between seeding the dataset and running
+// the query, which is how a case covers write behaviour: the query afterwards
+// observes what the write did.
+type caseMutation struct {
+	Op       string         `json:"op"`
+	Filter   map[string]any `json:"filter"`
+	Document map[string]any `json:"document"`
+	// Matched is the count the operation must return. A pointer so an absent
+	// key means "don't check" rather than "must be 0".
+	Matched *int `json:"matched"`
+	// Error, when set, means the operation must fail with a message containing
+	// this text. Mutually exclusive with Matched — a failed op has no count.
+	Error string `json:"error"`
 }
 
 // caseExpected is the result every binding must produce for a case's query.
@@ -109,6 +126,10 @@ func runCase(t *testing.T, dir string) {
 		t.Fatalf("InsertMany: %v", err)
 	}
 
+	for i, m := range q.Mutations {
+		applyMutation(t, coll, i, m)
+	}
+
 	query := nosqlite.Query{Filter: q.Filter, Skip: q.Skip, Limit: q.Limit}
 	for _, s := range q.Sort {
 		query.Sort = append(query.Sort, nosqlite.SortKey{Field: s.Field, Desc: s.Desc})
@@ -136,6 +157,36 @@ func runCase(t *testing.T, dir string) {
 		if !reflect.DeepEqual(gotDocs, want.Docs) {
 			t.Errorf("docs = %v, want %v", gotDocs, want.Docs)
 		}
+	}
+}
+
+// applyMutation performs one of a case's mutations. An unknown op is a fatal
+// error rather than a skip: a fixture naming an op this runner does not
+// implement would otherwise pass here while testing nothing.
+func applyMutation(t *testing.T, coll *nosqlite.Collection, i int, m caseMutation) {
+	t.Helper()
+
+	// Checked before the call, not in a default: arm below, so that an op no
+	// runner implements cannot be mistaken for the failure m.Error expects.
+	if m.Op != "replace" {
+		t.Fatalf("mutations[%d]: unknown op %q", i, m.Op)
+	}
+	n, err := coll.Replace(m.Filter, m.Document)
+
+	if m.Error != "" {
+		if err == nil {
+			t.Fatalf("mutations[%d] (%s): want an error containing %q, got none (matched %d)", i, m.Op, m.Error, n)
+		}
+		if !strings.Contains(err.Error(), m.Error) {
+			t.Fatalf("mutations[%d] (%s): error %q does not contain %q", i, m.Op, err, m.Error)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("mutations[%d] (%s): %v", i, m.Op, err)
+	}
+	if m.Matched != nil && n != *m.Matched {
+		t.Fatalf("mutations[%d] (%s) matched %d documents, want %d", i, m.Op, n, *m.Matched)
 	}
 }
 

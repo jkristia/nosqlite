@@ -293,6 +293,41 @@ func nsq_insert_many(id C.longlong, coll *C.char, docsJSON *C.char) (out *C.char
 	return respond(map[string]any{"ids": ids})
 }
 
+//export nsq_replace
+func nsq_replace(id C.longlong, coll *C.char, filterJSON *C.char, docJSON *C.char) (out *C.char) {
+	defer guard(&out)
+
+	h, err := acquire(int64(id))
+	if err != nil {
+		return respondError(err)
+	}
+	defer release(h)
+
+	// Two JSON arguments rather than one bundled object, mirroring the Go
+	// signature Replace(filter, doc). nsq_find bundles because a query has four
+	// parts that keep growing; a replace has exactly these two.
+	var filter map[string]any
+	if raw := goStr(filterJSON); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &filter); err != nil {
+			return respondError(fmt.Errorf("nosqlite: bad filter JSON: %w", err))
+		}
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(goStr(docJSON)), &doc); err != nil {
+		return respondError(fmt.Errorf("nosqlite: bad document JSON: %w", err))
+	}
+
+	c, err := h.db.Collection(goStr(coll))
+	if err != nil {
+		return respondError(err)
+	}
+	n, err := c.Replace(filter, doc)
+	if err != nil {
+		return respondError(err)
+	}
+	return respond(map[string]any{"replaced": n})
+}
+
 // wireQuery is the JSON shape of a query across the boundary. It mirrors
 // nosqlite.Query but spells the sort keys out as objects, which is friendlier
 // for every language on the other side.

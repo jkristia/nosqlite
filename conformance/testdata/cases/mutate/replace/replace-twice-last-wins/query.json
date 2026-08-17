@@ -1,0 +1,20 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "Mutations apply in order, and replacing an already-replaced document works: the second replacement matches the first one's content and supersedes it.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "replace",
+            "filter": {"_id": "13"},
+            "document": {"name": "Lucas Patel", "age": 45, "gender": "male", "tags": ["reading"]},
+            "matched": 1
+        },
+        {
+            "op": "replace",
+            "filter": {"tags": "reading", "age": 45},
+            "document": {"name": "Lucas Patel", "age": 46, "gender": "male"},
+            "matched": 1
+        }
+    ],
+    "filter": {"_id": "13"}
+}

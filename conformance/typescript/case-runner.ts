@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Database, type Document, type Filter, type SortKey } from "../../typescript/nosqlite/index.ts";
+import { Collection, Database, type Document, type Filter, type SortKey } from "../../typescript/nosqlite/index.ts";
 
 /** One sort key as written in query.json — see query.schema.json. */
 interface CaseSortKey {
@@ -19,11 +19,30 @@ interface CaseSortKey {
 }
 
 /**
+ * One write applied between seeding the dataset and running the query, which
+ * is how a case covers write behaviour: the query afterwards observes what the
+ * write did.
+ */
+interface CaseMutation {
+  op: "replace";
+  filter?: Filter;
+  document: Document;
+  /** The count the operation must return. Absent means "don't check". */
+  matched?: number;
+  /**
+   * When set, the operation must fail with a message containing this text.
+   * Mutually exclusive with `matched` — a failed op has no count.
+   */
+  error?: string;
+}
+
+/**
  * A case's query.json. Mirrors nosqlite's Query, but names its dataset
  * instead of embedding it, so many cases can share one dataset file.
  */
 interface CaseQuery {
   dataset: string;
+  mutations?: CaseMutation[];
   filter?: Filter;
   sort?: CaseSortKey[];
   skip?: number;
@@ -90,6 +109,8 @@ export class CaseRunner {
       const docs = db.collection("docs");
       docs.insertMany(dataset);
 
+      (query.mutations ?? []).forEach((m, i) => this.applyMutation(docs, i, m));
+
       const got = docs.find(query.filter ?? {}, {
         sort: this.toSortKeys(query.sort),
         skip: query.skip ?? 0,
@@ -108,6 +129,42 @@ export class CaseRunner {
     } finally {
       db.close();
       rmSync(dbDir, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Performs one of a case's mutations. An unknown op throws rather than being
+   * skipped: a fixture naming an op this runner does not implement would
+   * otherwise pass while testing nothing. That check sits outside the try
+   * below, so it cannot be mistaken for the failure an `error` assertion
+   * expects.
+   */
+  private applyMutation(docs: Collection, i: number, m: CaseMutation): void {
+    if (m.op !== "replace") throw new Error(`mutations[${i}]: unknown op ${String(m.op)}`);
+
+    let matched: number;
+    try {
+      matched = docs.replace(m.filter ?? {}, m.document);
+    } catch (e) {
+      if (!m.error) throw e;
+      const message = (e as Error).message;
+      if (!message.includes(m.error)) {
+        throw new Error(
+          `mutations[${i}] (${m.op}): error "${message}" does not contain "${m.error}"`,
+        );
+      }
+      return;
+    }
+
+    if (m.error !== undefined) {
+      throw new Error(
+        `mutations[${i}] (${m.op}): want an error containing "${m.error}", got none (matched ${matched})`,
+      );
+    }
+    if (m.matched !== undefined && matched !== m.matched) {
+      throw new Error(
+        `mutations[${i}] (${m.op}) matched ${matched} documents, want ${m.matched}`,
+      );
     }
   }
 

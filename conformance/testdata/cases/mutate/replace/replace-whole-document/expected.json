@@ -1,0 +1,8 @@
+{
+    "$schema": "../../../../expected.schema.json",
+    "ids": ["9"],
+    "fields": ["_id", "name", "age", "tags"],
+    "docs": [
+        {"_id": "9", "name": "Olivia Kowalski", "age": 37, "tags": ["math"]}
+    ]
+}

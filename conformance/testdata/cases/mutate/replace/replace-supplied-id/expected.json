@@ -1,0 +1,12 @@
+{
+    "$schema": "../../../../expected.schema.json",
+    "ids": ["7", "16", "27", "36", "47"],
+    "fields": ["_id", "name", "age", "tags"],
+    "docs": [
+        {"_id": "7", "name": "Emma Rivera", "age": 33, "tags": ["cooking"]},
+        {"_id": "16", "name": "Ada Novak", "age": 50, "tags": ["travel", "cooking", "gaming"]},
+        {"_id": "27", "name": "Lucas Rivera", "age": 22, "tags": ["cooking", "gaming"]},
+        {"_id": "36", "name": "Emma Novak", "age": 40, "tags": ["travel", "cooking", "gaming"]},
+        {"_id": "47", "name": "Liam Rivera", "age": 62, "tags": ["cooking", "gaming"]}
+    ]
+}

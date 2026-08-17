@@ -1,0 +1,14 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "The error half of replace-supplied-id, and the reason supplying an _id is worth it. The filter is a typo away from the intended one — it means document 7 but matches document 8 — so the _id in the replacement disagrees with what the filter found. That is refused: nothing is written, and BOTH documents come back untouched below, still carrying the email field the replacement does not have. Without the _id there would be nothing to disagree with, and document 8 would silently become Emma Rivera.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "replace",
+            "filter": {"name": "Emma Osei"},
+            "document": {"_id": "7", "name": "Emma Rivera", "age": 33},
+            "error": "the filter matched document \"8\", but the replacement carries _id \"7\""
+        }
+    ],
+    "filter": {"_id": {"$in": ["7", "8"]}}
+}

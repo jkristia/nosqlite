@@ -1,0 +1,14 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "A replace whose filter matches nothing returns 0 and writes nothing at all — there is no upsert, so the document it would have written is absent afterwards.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "replace",
+            "filter": {"_id": "does-not-exist"},
+            "document": {"name": "Nobody", "age": 1},
+            "matched": 0
+        }
+    ],
+    "filter": {"name": "Nobody"}
+}

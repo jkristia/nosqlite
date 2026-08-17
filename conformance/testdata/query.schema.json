@@ -7,9 +7,46 @@
     "additionalProperties": false,
     "properties": {
         "$schema": { "type": "string" },
+        "description": {
+            "type": "string",
+            "description": "Optional prose: what behaviour this case pins down, when the case name alone does not carry it. Ignored by every runner."
+        },
         "dataset": {
             "type": "string",
             "description": "Name of a file in testdata/datasets/ (without .json) to insert before running this query."
+        },
+        "mutations": {
+            "type": "array",
+            "description": "Writes applied after the dataset is seeded and before the query runs, in order. Omit for a read-only case. This is what lets a case cover write behaviour — the query below then observes the result.",
+            "items": {
+                "type": "object",
+                "required": ["op"],
+                "additionalProperties": false,
+                "not": { "required": ["matched", "error"] },
+                "properties": {
+                    "op": {
+                        "enum": ["replace"],
+                        "description": "Which write to perform. `replace` overwrites the first document matching `filter` with `document` in full."
+                    },
+                    "filter": {
+                        "type": "object",
+                        "description": "Which document to write to. Same Mongo-dialect grammar as the query `filter` below."
+                    },
+                    "document": {
+                        "type": "object",
+                        "description": "For `replace`: the complete replacement document, not a diff — omitted fields are gone afterwards. `_id` is immutable, so include it only if it equals the matched document's."
+                    },
+                    "matched": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Optional assertion: the count the operation must return (for `replace`, 0 or 1). The runner checks it before running the query, so a case that mutates nothing fails here rather than confusingly further down. Mutually exclusive with `error` — a failed operation returns no count."
+                    },
+                    "error": {
+                        "type": "string",
+                        "description": "Optional assertion: the operation must fail, and the message must CONTAIN this text. A substring, not the whole message, because only the text is shared across the three bindings — Go returns an error, Python raises NoSQLiteError, TypeScript throws. The query below then runs against the unchanged data, which is how a case proves a rejected write wrote nothing."
+                    }
+                }
+            }
         },
         "filter": {
             "type": "object",
