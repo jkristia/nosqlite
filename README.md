@@ -19,7 +19,8 @@ works on an append-only file and how delete and compaction will,
 how filters compile and match, [`docs/testing.md`](docs/testing.md) for how unit,
 conformance, and scale tests are organized across the three languages, and
 [`docs/nosql-primer.md`](docs/nosql-primer.md) if *collection* and *document* are
-new terms.
+new terms. [`docs/todo.md`](docs/todo.md) is the live working list of what is
+being built next.
 
 ```
 ./demo.nsq          the database — one file, all collections, copy it anywhere
