@@ -758,7 +758,7 @@ Already present:
 
 ```go
 // Whole-document write, so Mongo's name for it is Replace, not Update — see
-// updates-and-compaction.md §9.1. It caps at one document, and there is
+// replace-delete-and-compaction.md §9.1. It caps at one document, and there is
 // deliberately no ReplaceMany (§8.1 of that doc).
 func (c *Collection) Replace(filter, doc map[string]any) (int, error)  // op=3 records
 
@@ -768,8 +768,8 @@ func ScanLive(path string) (LiveStats, error)  // the same accounting, offline
 ```
 
 `Replace` leaves the superseded record in the file. Nothing reclaims that space yet —
-`Compact` is step 8 of updates-and-compaction.md §8 — so a database that is replaced in
-repeatedly grows without bound.
+`Compact` is step 8 of replace-delete-and-compaction.md §8 — so a database that is
+replaced in repeatedly grows without bound.
 
 ---
 
@@ -1016,8 +1016,8 @@ Ordered, each pointing at the extension point left for it:
 1. **Replace and delete** — `op = 2/3` records (§3) plus `Compact()` to rewrite the file
    keeping only live versions, regrouped by collection so scan locality is restored.
    `DropCollection` falls out of the same machinery. No format change. Designed in full in
-   [updates-and-compaction.md](updates-and-compaction.md); steps 1-7 are built — snapshot
-   captures the file handle, the `dead` byte counter, the per-collection `dirty` flag,
+   [replace-delete-and-compaction.md](replace-delete-and-compaction.md); steps 1-7 are
+   built — snapshot captures the file handle, the `dead` byte counter, the per-collection `dirty` flag,
    `Collection.Replace` and `Delete`/`DeleteMany`, and replay of both record types.
    `Compact` remains.
 2. **Secondary indexes** — a planner walking the Matcher tree (§5) to turn `cmpNode` /
@@ -1073,7 +1073,7 @@ Worth settling before or during implementation:
   gap is large, `RequiredPaths()` moves into v1 — it changes no formats and no APIs, so
   the decision can be deferred until there is a benchmark to point at.
 - **`Len()`/`Count(nil)` stay exact.** Settled by
-  [updates-and-compaction.md](updates-and-compaction.md) §6.3: a delete removes the index
-  slot outright rather than tombstoning it, so `len(offsets)` remains the live document
+  [replace-delete-and-compaction.md](replace-delete-and-compaction.md) §6.3: a delete
+  removes the index slot outright rather than tombstoning it, so `len(offsets)` remains the live document
   count and `Count(nil)` keeps its O(1) short-circuit. The removal rides along free,
   because both index arrays are copied per call anyway.

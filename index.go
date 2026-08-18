@@ -52,7 +52,7 @@ type Collection struct {
 	// collection's id, and scanSequential would hand it back. A whole-collection
 	// bool is blunt — one replace disables the fast path for every subsequent
 	// scan — but it is one branch, it fails in the safe direction, and Compact
-	// clears it. See docs/updates-and-compaction.md §2.2.
+	// clears it. See docs/replace-delete-and-compaction.md §2.2.
 	dirty bool
 
 	// ids is nil until something actually needs _id lookup — the first insert
@@ -109,7 +109,7 @@ func (c *Collection) appendIndex(payloadOffset int64, payloadLength uint32) {
 // reader, and worse than a normal one: offsets and lengths are separate arrays,
 // so a reader can catch the new offset with the old length and read the wrong
 // number of bytes from the right place — truncated JSON rather than a crash.
-// See docs/updates-and-compaction.md §2.1.
+// See docs/replace-delete-and-compaction.md §2.1.
 //
 // The copy is O(n) per call, which is why Replace is filter-based: one call can
 // amortise it over many documents. §4 of that doc records the chunked-slice
@@ -142,7 +142,7 @@ func (c *Collection) replaceIndex(i int, payloadOffset int64, payloadLength uint
 // The slot is removed outright rather than tombstoned, which is what keeps
 // Len() exactly len(c.offsets) and Count(nil) O(1). The shift costs nothing
 // extra: both arrays are being copied anyway. See
-// docs/updates-and-compaction.md §6.3.
+// docs/replace-delete-and-compaction.md §6.3.
 //
 // Caller must hold db.mu for writing.
 func (c *Collection) removeIndex(positions []int) {
@@ -188,7 +188,7 @@ func (c *Collection) removeIndex(positions []int) {
 // fingerprint, so zeroing one entry makes every entry behind it in the same
 // probe chain unreachable. There is no spare value to mark a hole with either:
 // fingerprint folds 0 to 1, so 1 is a legitimate fingerprint. See
-// docs/updates-and-compaction.md §6.3.
+// docs/replace-delete-and-compaction.md §6.3.
 //
 // It costs no I/O, which is the part worth knowing. The table stores
 // fingerprints rather than _id strings, and every document has exactly one
@@ -218,7 +218,7 @@ func (c *Collection) remapIDTable(mapping []int32) {
 // Replay applies deletes by marking rather than removing, so that slot numbers
 // stay valid for the rest of the walk while the id table resolving _ids is
 // keyed by them; this is the second phase that runs once at the end. See
-// docs/updates-and-compaction.md §6.4.
+// docs/replace-delete-and-compaction.md §6.4.
 //
 // Caller must hold db.mu for writing.
 func (c *Collection) compactMarkedSlots() {
@@ -242,7 +242,7 @@ type snapshot struct {
 	// file is captured rather than reached for through c.db.file at scan time,
 	// because offsets are only meaningful against the file they were taken
 	// from. Today those are always the same handle; once Compact swaps in a
-	// rewritten file (docs/updates-and-compaction.md §7) an in-flight scan would
+	// rewritten file (docs/replace-delete-and-compaction.md §7) an in-flight scan would
 	// otherwise pair old offsets with the new file and read at arbitrary record
 	// boundaries. Capturing it is one field now and invasive later.
 	file *os.File

@@ -15,6 +15,29 @@ file wins; where they disagree about mechanism, §11 does.
 
 ---
 
+## 0. Make `replace-delete-and-compaction.md` readable
+
+**Tomorrow's first job.** The document is correct but does not explain — reading it
+does not leave you able to say back how delete and its replay work. Fix the
+explanation, not the facts.
+
+- [ ] Have the reader mark the exact paragraphs that lost them, and start there.
+      Everything below is a guess at the cause until that exists.
+- [ ] Lead with the worked example. §6's "three inserts and one delete" is the
+      clearest thing in the file and it sits at line ~400, behind three sections of
+      invariants. The trace should come first and the rules should be read off it.
+- [ ] Split §6.4. One section currently carries four separate ideas: the two-phase
+      replay, why the idTable entry cannot be removed, why zero length is the marker,
+      and what an unresolvable tombstone means. Each deserves its own heading.
+- [ ] Cut the justification down. Long stretches argue against designs that were
+      never chosen (free lists, live flags, in-place deletion). Keep one sentence of
+      "not this, because", move the rest out of the reader's path.
+- [ ] Consider splitting the file. Replace, delete, and compaction are three
+      subjects, 845 lines, 26 headings; the terms table exists because the reader is
+      expected to hold all three at once.
+
+---
+
 ## 1. Delete — bindings and conformance
 
 The Go engine is done: `Delete`/`DeleteMany`, and replay of the `op=2` records they
@@ -47,8 +70,8 @@ replace:
   the property delete does not preserve
 
 **Worth adding while in there:** an `"insert"` op. §6.5 of
-[`updates-and-compaction.md`](updates-and-compaction.md) — delete, then re-insert the
-same `_id` — is the sharpest delete behaviour there is, and it cannot be expressed in
+[`replace-delete-and-compaction.md`](replace-delete-and-compaction.md) — delete, then
+re-insert the same `_id` — is the sharpest delete behaviour there is, and it cannot be expressed in
 the corpus today because a case can only insert through its dataset. It is about
 three lines per runner.
 

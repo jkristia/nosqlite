@@ -41,7 +41,7 @@ func findIDs(t *testing.T, c *Collection) []string {
 }
 
 // TestDirtyForcesStridedScan is the regression test for
-// docs/updates-and-compaction.md §2.2.
+// docs/replace-delete-and-compaction.md §2.2.
 //
 // scanSequential re-derives collection membership from each record header
 // rather than from the index, so it returns records the index has dropped. That

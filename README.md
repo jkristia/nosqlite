@@ -13,8 +13,8 @@ whole-document overwrite — **and delete**; compaction is still to come. See
 [`docs/design.md`](docs/design.md) for the full design,
 [`docs/file-format.md`](docs/file-format.md) for what is on disk and how a
 collection scans its own records,
-[`docs/updates-and-compaction.md`](docs/updates-and-compaction.md) for how replace and
-delete work on an append-only file and how compaction will,
+[`docs/replace-delete-and-compaction.md`](docs/replace-delete-and-compaction.md)
+for how replace and delete work on an append-only file and how compaction will,
 [`docs/matcher.md`](docs/matcher.md) for
 how filters compile and match, [`docs/testing.md`](docs/testing.md) for how unit,
 conformance, and scale tests are organized across the three languages, and

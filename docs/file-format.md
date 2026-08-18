@@ -153,30 +153,47 @@ flowchart TD
     V --> L["read 12-byte record header at off"]
     L --> C{"op?"}
     C -->|"4 define"| D["json.Unmarshal<br/>register name↔id"]
-    C -->|"1 insert"| I["db.byID[coll].appendIndex(<br/>off+12, length)<br/>db.total++"]
-    C -->|"2/3/5/6"| E1["hard error:<br/>newer file"]
+    C -->|"1 insert"| I["db.byID[coll].appendIndex(<br/>off+12, length)<br/>db.total++<br/>idTable live? also parse _id, add"]
+    C -->|"3 replace"| R["ensureIDTable — lazy, once<br/>lookup _id → slot i<br/>offsets[i], lengths[i] = new record"]
+    C -->|"2 delete"| X["ensureIDTable — lazy, once<br/>lookup _id → slot i<br/>lengths[i] = 0 — mark, do not remove<br/>db.total--"]
+    C -->|"5/6 begin/commit"| E1["hard error:<br/>newer file"]
     C -->|"other"| E2["hard error:<br/>unknown op"]
     D --> N["off = off + 12 + length"]
     I --> N
+    R --> N
+    X --> N
     N -->|"more bytes"| L
-    N -->|"EOF"| Z["done"]
+    N -->|"EOF"| P["each collection a tombstone marked:<br/>compactMarkedSlots — drop zero-length<br/>slots, rebuild that idTable"]
+    P --> Z["done"]
 ```
+
+Delete is the only op that does not finish its work inside the loop. The idTable that
+resolves `_id`s is keyed by slot number, so removing a slot mid-walk would shift every
+later slot and change what an already-recorded position means. Marking leaves positions
+valid for the rest of the walk; one pass at the end takes the marked slots out.
+[replace-delete-and-compaction.md](replace-delete-and-compaction.md#end-to-end-three-inserts-and-one-delete)
+walks a real file through it — three inserts, delete the middle one, reopen — and §6.4
+there covers the rule.
 
 Three properties make this cheap enough to do on every open:
 
-- **Nothing is unmarshalled.** For an insert, replay records *where the payload is and
-  how long it is* and moves on. The only JSON parsed is the handful of
-  define-collection records. No allocation per document.
+- **Nothing is unmarshalled** — until a collection is first mutated. For an insert, replay
+  records *where the payload is and how long it is* and moves on; the only JSON parsed is
+  the handful of define-collection records. A collection's first `op=2`/`op=3` forces its
+  idTable to be built, and from there its inserts get parsed for `_id` too
+  ([replace-delete-and-compaction.md §5](replace-delete-and-compaction.md#5-replay-resolves-records-by-_id)).
+  A file nothing was ever deleted from or replaced in pays none of that.
 - **One pass builds every collection's index.** Not one pass per collection — the `coll`
   tag routes each record as it goes by.
 - **The offset stored is the payload's, not the record header's** —
   `c.appendIndex(off+recordHeaderSize, length)`
-  ([store.go:406](../store.go#L406)). So a later read is one `ReadAt` of exactly the JSON
+  ([store.go:424](../store.go#L424)). So a later read is one `ReadAt` of exactly the JSON
   bytes, with no header to re-parse.
 
 `WithFastOpen()` skips the CRC pass and `Discard`s payloads instead of reading them,
 checking only the final record so torn-tail recovery still works. Faster, and weaker: mid-file
-bit rot then goes unnoticed until something reads that record.
+bit rot then goes unnoticed until something reads that record. It cannot skip a replace or
+delete payload — that payload is the only place the record's `_id` appears.
 
 ### Torn tail
 
@@ -189,7 +206,7 @@ recovery a two-case rule, not a repair algorithm:
 | `length` exceeds remaining file | truncate, open succeeds | (indistinguishable — see §1) |
 | CRC mismatch | truncate, open succeeds | `ErrCorrupt`, refuse to open |
 
-[`truncateTail`](../store.go#L425) cuts back to the end of the last good record and
+[`truncateTail`](../store.go#L612) cuts back to the end of the last good record and
 returns `nil` — a torn tail after a crash is *expected*, not an error. The in-flight
 insert is lost, which is correct: it never returned success to the caller.
 
@@ -364,14 +381,14 @@ Skipping unknown records would be the friendlier-looking choice and the wrong on
 
 Reserving the *op value* is the easy half, though. What `op=2`/`op=3` actually cost —
 garbage, the index immutability rule, and the two scan paths — is worked out in
-[`updates-and-compaction.md`](updates-and-compaction.md).
+[`replace-delete-and-compaction.md`](replace-delete-and-compaction.md).
 
 ---
 
 ## See also
 
 - [`design.md`](design.md) §3–§4 — the reasoning behind the storage engine and memory model
-- [`updates-and-compaction.md`](updates-and-compaction.md) — what changes when records can
-  be superseded, and why compaction is about more than space
+- [`replace-delete-and-compaction.md`](replace-delete-and-compaction.md) — what changes
+  when records can be superseded, and why compaction is about more than space
 - [`matcher.md`](matcher.md) — what happens to a payload once the scan has read it
 - [`compression.md`](compression.md) — the first real claim on the record `flags` byte

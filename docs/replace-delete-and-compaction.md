@@ -394,6 +394,78 @@ That is the whole write side. Nothing is erased, nothing is overwritten, the ori
 `op=1` record stays byte-for-byte where it was. **You add ~27 bytes to the file in order
 to remove a document.**
 
+### End to end: three inserts and one delete
+
+Everything in §6 in one worked example. Three documents go in, the middle one is deleted,
+and the database is reopened. The offsets and lengths below are the real ones — this is
+`nsq dump` output for the file those calls produce.
+
+**After the three inserts.** One `op=4` record names the collection, then one `op=1` per
+document. The index holds the *payload* offset, which is the record offset + 12.
+
+```
+file                                            index — users
+off:  32      67      103     141               position:    0     1     2
+    +-------+-------+-------+-------+           offset:     79   115   153
+    | def   | ins   | ins   | ins   |           length:     24    26    25
+    | users | _id 1 | _id 2 | _id 3 |           (_id:      "1"   "2"   "3")
+    +-------+-------+-------+-------+
+```
+
+**`Delete({"_id": "2"})`.** An 11-byte payload naming only the `_id` is appended. Nothing
+in the file changes; the `op=1` record for document 2 stays byte-for-byte where it was.
+
+```
+file                                                    index — users
+off:  32      67      103     141     178               position:    0     1
+    +-------+-------+-------+-------+-------+           offset:     79   153
+    | def   | ins   | ins   | ins   | del   |           length:     24    25
+    | users | _id 1 | _id 2 | _id 3 | _id 2 |           (_id:      "1"   "3")
+    +-------+-------+-------+-------+-------+
+                      ^                ^
+                      |                nothing points at this record — ever
+                      still on disk, now unreachable
+```
+
+`Len()` is 2 and a query returns documents 1 and 3, because the index slot is gone. The
+file grew from 178 to 201 bytes, and `DeadBytes()` is 61 — the abandoned insert (12 + 26)
+plus the tombstone (12 + 11), which is garbage the moment it is written (§6.7).
+
+**Reopen.** Replay walks all five records and rebuilds that same index from the file
+alone. The delete is applied in two phases, and the second one is where the slot actually
+disappears:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant F as record at off
+    participant IX as index arrays
+    participant T as idTable
+    F->>IX: 32 · op=4 · users → id 1
+    F->>IX: 67 · op=1 · append slot 0 = (79, 24) — no parse
+    F->>IX: 103 · op=1 · append slot 1 = (115, 26) — no parse
+    F->>IX: 141 · op=1 · append slot 2 = (153, 25) — no parse
+    F->>T: 178 · op=2 · first mutation for users
+    Note over T: ensureIDTable: read back slots 0-2,<br/>parse their _ids, build the table — once
+    T-->>F: "2" → slot 1
+    F->>IX: lengths[1] = 0 — mark, do not remove (db.total drops to 2)
+    Note over F,T: EOF — the walk is over, nothing shifted during it
+    IX->>IX: compactMarkedSlots: drop every zero-length slot<br/>offsets [79, 153] · lengths [24, 25]
+    IX->>T: remapIDTable: "1" → 0, "3" → 1
+```
+
+So yes — the index ends up holding documents 1 and 3, in that order. Two details the
+picture is easy to read past:
+
+- **The tombstone is never read by a query.** Its only reader is replay, and replay wants
+  exactly one thing from it: which `_id` died (§6.1).
+- **The live `Delete` did not go through mark-then-compact** — it removed the slot
+  immediately (§6.3). The two phases exist only because replay resolves `_id`s through a
+  table keyed by slot number, and slot numbers must not move mid-walk (§6.4). Both paths
+  have to land on the same index, which is what `TestReplaySurvivesDelete` and
+  `TestDeleteThenReopenAgreesWithScanLive` in [`delete_test.go`](../delete_test.go) pin
+  down.
+
 ### 6.1 Why write anything at all
 
 The obvious objection, and the thing worth getting straight first: if `Delete` just drops
