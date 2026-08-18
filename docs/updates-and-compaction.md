@@ -4,9 +4,9 @@ How mutation works on an append-only file: what `Replace` and `Delete` do to the
 the in-memory index, and to the cost of opening a database.
 
 Companion to [`file-format.md`](file-format.md), which describes the record format itself.
-This is roadmap item 1 of [`design.md`](design.md) §11. `Replace` and the groundwork under
-it are built, replay included; `Delete` and `Compact` are designed here but not yet
-written — §8 tracks which is which.
+This is roadmap item 1 of [`design.md`](design.md) §11. `Replace` and `Delete` are built,
+replay included; `Compact` is designed here but not yet written — §8 tracks which is
+which.
 
 ## Terms
 
@@ -215,7 +215,7 @@ file-order equal to insertion-order, and per-collection locality, all in one pas
 ## 3. The record
 
 `op = 3` is a replace and `op = 2` is a delete ([`store.go`](../store.go)). Both fit the
-existing framing, so mutation needs no format change. An op a binary does not understand
+existing framing, so mutation needed no format change. An op a binary does not understand
 is a **hard error** on read rather than a skip, so an older binary meeting a file with
 replaces in it fails loudly instead of silently serving stale documents.
 
@@ -485,7 +485,6 @@ pass 1 — the existing walk:
     op=1  ->  append slot                        (no parse)
     op=3  ->  resolve _id -> i, re-point slot i
     op=2  ->  resolve _id -> i, set lengths[i] = 0     <- mark, do not remove
-              and drop the _id from the idTable
 
 once, at the end of replay:
     compact out every zero-length slot
@@ -493,9 +492,31 @@ once, at the end of replay:
 ```
 
 Nothing shifts during the walk, so positions stay valid throughout, and the end-of-replay
-cleanup is a single O(n) pass. The `_id` resolution uses the same lazy-build-on-first-
-`op=2`/`op=3` rule as §5 — a database that never deletes still replays without parsing a
-single document.
+cleanup is a single O(n) pass per collection that saw a tombstone. The `_id` resolution
+uses the same lazy-build-on-first-`op=2`/`op=3` rule as §5 — a database that never deletes
+still replays without parsing a single document.
+
+**The mark is also how the idTable entry is retired.** The obvious move would be to drop
+the dead `_id` from the table during the walk, and §6.3 has just ruled that out: there is
+no way to remove one entry without breaking the probe chain behind it. So the entry stays,
+and `lookupID` ([`lookupID`](../index.go)) skips any candidate whose length is zero rather
+than reading it. Two things fall out, and both are load-bearing:
+
+- Without the skip, `idAt` reads a zero-byte payload and `json.Unmarshal` fails with
+  *"unexpected end of JSON input"* — so `Open` would reject a perfectly good file. This is
+  not a tidiness measure.
+- It is exactly what makes §6.5 work. Delete-then-re-insert leaves two entries sharing one
+  fingerprint, one pointing at the marked slot; the lookup walks past the marked one and
+  finds the live document.
+
+A zero length is unambiguous as a marker because no document can have one — the shortest
+payload any record can hold is `{"_id":"x"}` — and published index arrays never contain
+one, since the live path removes the slot instead of zeroing it.
+
+**A tombstone naming an `_id` the collection does not hold is `ErrCorrupt`**, the same
+answer §5 gives an unresolvable replace. `Delete` resolves its match before writing
+anything (§9), so nothing this engine writes can produce one; a file containing one
+disagrees with itself.
 
 ### 6.5 Delete, then re-insert the same `_id`
 
@@ -545,11 +566,12 @@ Two limits to state plainly:
   vanish in a crash and the document comes back. Not a bug — the mode's documented trade,
   which is why design.md §6 keeps the two properties in separate rows.
 
-The one ordering rule implementation must honour: **drop the in-memory slot only after
-the append succeeds**, mirroring [`insertPayload`](../collection.go) —
-*"a reader must never see an index entry pointing at a record that was not written."*
-Inverted for delete: a reader must never stop seeing a document whose tombstone failed to
-write.
+The ordering rule that follows: **drop the in-memory slot only after the append
+succeeds**, mirroring [`insertPayload`](../collection.go) — *"a reader must never see an
+index entry pointing at a record that was not written."* Inverted for delete: a reader
+must never stop seeing a document whose tombstone failed to write. `DeleteMany` writes its
+tombstones with [`appendBatch`](../store.go), which reports how many landed and always
+lands a prefix, so only that prefix of matched positions leaves the index.
 
 ### 6.7 Deleting makes the file bigger
 
@@ -661,20 +683,23 @@ Ordered so each step is small and testable on its own:
 | 3 | per-collection `dirty` flag; set on first replace **or delete**, disables `scanSequential`, cleared by `Compact` | `index.go`, `scan.go` | **done** |
 | 4 | `op=3` write path: `Replace` = encode + `appendRecord` + full COW index swap | `collection.go`, `index.go` | **done** |
 | 5 | replay applies `op=3`, building the idTable on first encounter (§5) | `store.go`, `index.go` | **done** |
-| 6 | `op=2` write path: `Delete` = tombstone + slot removal + idTable rebuild (§6.3) | `collection.go`, `index.go` | |
-| 7 | replay applies `op=2` by mark-then-compact (§6.4) | `store.go`, `index.go` | |
+| 6 | `op=2` write path: `Delete`/`DeleteMany` = tombstone + slot removal + idTable remap (§6.3) | `collection.go`, `index.go` | **done** |
+| 7 | replay applies `op=2` by mark-then-compact (§6.4) | `store.go`, `index.go` | **done** |
 | 8 | `Compact()` — write-new-and-rename, Unix first | new `compact.go` | |
 | 9 | Windows compaction story | `compact.go` | |
 
 Step 3 is the one that looks optional and is not: without it, steps 4 and 6 ship a
 silently wrong `scanSequential` (§2.2).
 
-Steps 6 and 7 are deliberately separate. The write path can be built and unit-tested
-against a live process before replay knows how to reconstruct a deletion; getting them in
-one commit means debugging both halves at once.
+Steps 6 and 7 were deliberately separate commits. The write path could be built and
+unit-tested against a live process before replay knew how to reconstruct a deletion;
+doing them together would have meant debugging both halves at once.
 
 Steps 4 and 5 were not separable in the same way — until replay could apply an `op=3`
 record, a database `Replace` had been called on could not be reopened at all.
+
+Each Go step implies a follow-on commit carrying the same operation across the C ABI and
+both bindings, with conformance cases; that is how step 4 landed and how step 6 lands.
 
 ---
 
@@ -686,11 +711,6 @@ record, a database `Replace` had been called on could not be reopened at all.
 - **Should `nsq compact` exist as a CLI verb** so a database can be compacted without the
   owning process? It is the same code pointed at a closed file, and it composes with
   `nsq stat`'s dead-byte report. `nsq stat` already names it in the hint it prints.
-- **Should deleting a non-existent `_id` write a tombstone?** Writing one is garbage that
-  compaction must later collect, for a delete that deleted nothing. Not writing one means
-  `Delete` needs the idTable built just to answer "does this exist", which is the expensive
-  path for a no-op. Leaning towards **resolve first, write nothing if absent**, returning a
-  count of 0 — the idTable is needed for the delete itself anyway.
 
 ---
 

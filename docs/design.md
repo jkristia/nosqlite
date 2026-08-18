@@ -29,8 +29,8 @@ aren't yet familiar; this document assumes them.
 
 **Non-goals for v1** — deliberately, not accidentally:
 
-- Deletes, projections, aggregation. Replace exists and is whole-document; the space a
-  superseded record holds is not reclaimed, because compaction does not exist yet.
+- Projections, aggregation. Replace and delete exist; the space a superseded record
+  holds is not reclaimed, because compaction does not exist yet.
 - Secondary indexes (all queries are full scans; §5 says how indexes slot in). This is
   the price of the memory target: queries are I/O- and parse-bound until indexes land.
 - Transactions, multi-document atomicity.
@@ -129,12 +129,13 @@ bytes are zero and are validated as zero, so they can be claimed later without a
   | 1 | insert — payload is the document | yes |
   | 4 | define collection — payload is `{"id":7,"name":"users"}` | yes |
   | 3 | replace — payload is the new document | yes |
-  | 2 | delete tombstone — payload is the `_id` | reserved |
+  | 2 | delete tombstone — payload is `{"_id":"…"}` | yes |
   | 5 / 6 | begin / commit, for multi-document atomicity | reserved |
 
   Reserving the values is what keeps every roadmap item in §11 a pure append rather
-  than a format change — replace landed without touching the format at all. An unknown op is a hard error on read, never a skip, so an old
-  binary fails loudly against a newer file instead of silently ignoring deletes.
+  than a format change — replace and delete both landed without touching the format at
+  all. An unknown op is a hard error on read, never a skip, so an old binary fails
+  loudly against a newer file instead of silently ignoring its writes.
 - **`flags`** is zero in v1 and validated as zero. It is where per-record concerns go —
   a compression bit is the obvious first claim.
 - **`crc32`** catches bit rot and, more importantly, distinguishes a corrupt record from
@@ -747,8 +748,6 @@ A real cursor only becomes necessary for streaming across the C ABI, which is a 
 foreclose them:
 
 ```go
-func (c *Collection) Delete(filter map[string]any) (int, error)           // op=2 tombstones
-func (c *Collection) DeleteMany(filter map[string]any) (int, error)
 func (c *Collection) Update(filter, update map[string]any) (int, error)   // later: $set, $inc
 func (db *DB) Compact() error                                            // rewrite live records
 func (c *Collection) EnsureIndex(field string) error                     // planner in §5
@@ -1017,10 +1016,10 @@ Ordered, each pointing at the extension point left for it:
 1. **Replace and delete** — `op = 2/3` records (§3) plus `Compact()` to rewrite the file
    keeping only live versions, regrouped by collection so scan locality is restored.
    `DropCollection` falls out of the same machinery. No format change. Designed in full in
-   [updates-and-compaction.md](updates-and-compaction.md); steps 1-5 are built — snapshot
+   [updates-and-compaction.md](updates-and-compaction.md); steps 1-7 are built — snapshot
    captures the file handle, the `dead` byte counter, the per-collection `dirty` flag,
-   `Collection.Replace`, and replay of the `op=3` records it writes. Delete and `Compact`
-   remain.
+   `Collection.Replace` and `Delete`/`DeleteMany`, and replay of both record types.
+   `Compact` remains.
 2. **Secondary indexes** — a planner walking the Matcher tree (§5) to turn `cmpNode` /
    `inNode` on an indexed field into a lookup, with the rest as a residual filter.
    Indexes rebuild from the log on open; nothing new on disk.
@@ -1073,7 +1072,8 @@ Worth settling before or during implementation:
   opinion: benchmark `encoding/json` over the real record size before committing. If the
   gap is large, `RequiredPaths()` moves into v1 — it changes no formats and no APIs, so
   the decision can be deferred until there is a benchmark to point at.
-- **Should `Len()`/`Count(nil)` be exact after updates and deletes land?** With
-  tombstones in the log, `len(offsets)` counts records, not live documents. Either the
-  index tracks a live count, or `Count` stops being O(1). Cheap to get right now, awkward
-  later.
+- **`Len()`/`Count(nil)` stay exact.** Settled by
+  [updates-and-compaction.md](updates-and-compaction.md) §6.3: a delete removes the index
+  slot outright rather than tombstoning it, so `len(offsets)` remains the live document
+  count and `Count(nil)` keeps its O(1) short-circuit. The removal rides along free,
+  because both index arrays are copied per call anyway.

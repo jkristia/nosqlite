@@ -530,3 +530,369 @@ func TestDeleteDeadBytesMatchScanLive(t *testing.T) {
 		t.Errorf("ScanLive counted %d live documents, want 1", live)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Replay (op=2)
+// ---------------------------------------------------------------------------
+
+func TestReplaySurvivesDelete(t *testing.T) {
+	path := t.TempDir() + "/replay.nsq"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := mustCollection(t, db, "users")
+	for _, id := range []string{"a", "b", "c", "d"} {
+		if _, err := c.Insert(map[string]any{"_id": id, "v": 0}); err != nil {
+			t.Fatalf("Insert %s: %v", id, err)
+		}
+	}
+	if _, err := c.Delete(map[string]any{"_id": "b"}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	wantDead := db.DeadBytes()
+
+	db = reopen(t, db, path)
+	c = mustCollection(t, db, "users")
+
+	if got := c.Len(); got != 3 {
+		t.Errorf("Len after reopen = %d, want 3", got)
+	}
+	// Order, not just membership: the end-of-replay compaction has to close the
+	// gap the same way the live path did, or a reopen quietly reorders the
+	// collection.
+	if ids := findIDs(t, c); !equalStrings(ids, []string{"a", "c", "d"}) {
+		t.Errorf("ids after reopen = %v, want [a c d]", ids)
+	}
+	got, err := c.FindOne(map[string]any{"_id": "b"})
+	if err != nil {
+		t.Fatalf("FindOne: %v", err)
+	}
+	if got != nil {
+		t.Errorf("b came back after reopen: %v", got)
+	}
+	if !c.dirty {
+		t.Error("collection not marked dirty after replaying a delete — scans may take the sequential path")
+	}
+	if got := db.DeadBytes(); got != wantDead {
+		t.Errorf("DeadBytes after reopen = %d, want %d", got, wantDead)
+	}
+	// db.total is the document count the read-shape heuristic divides by, and
+	// nothing else asserts that replay brings it back down.
+	db.mu.RLock()
+	total := db.total
+	db.mu.RUnlock()
+	if total != 3 {
+		t.Errorf("db.total after reopen = %d, want 3", total)
+	}
+}
+
+// TestReplayDeleteThenReinsertSameID is §6.5, and it is the test that fails if
+// replay tries to remove the _id's table entry instead of marking its slot.
+//
+// After the tombstone the file holds two records naming "ord-1": a dead one and
+// a live one, and the idTable ends up with two entries sharing one fingerprint.
+// The lookup has to skip the marked slot and land on the live document.
+func TestReplayDeleteThenReinsertSameID(t *testing.T) {
+	path := t.TempDir() + "/reinsert.nsq"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := mustCollection(t, db, "users")
+
+	if _, err := c.Insert(map[string]any{"_id": "ord-1", "v": 1}); err != nil {
+		t.Fatalf("Insert v1: %v", err)
+	}
+	if _, err := c.Delete(map[string]any{"_id": "ord-1"}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	// Allowed precisely because the tombstone freed the _id.
+	if _, err := c.Insert(map[string]any{"_id": "ord-1", "v": 2}); err != nil {
+		t.Fatalf("re-Insert: %v", err)
+	}
+	// And a replace of the re-inserted document, which can only resolve if the
+	// lookup skipped the marked slot.
+	if _, err := c.Replace(map[string]any{"_id": "ord-1"}, map[string]any{"v": 3}); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+
+	db = reopen(t, db, path)
+	c = mustCollection(t, db, "users")
+
+	if got := c.Len(); got != 1 {
+		t.Errorf("Len after reopen = %d, want 1", got)
+	}
+	got, err := c.FindOne(map[string]any{"_id": "ord-1"})
+	if err != nil {
+		t.Fatalf("FindOne: %v", err)
+	}
+	if got == nil || got["v"] != float64(3) {
+		t.Errorf("ord-1 after reopen = %v, want v=3 — later record wins, always", got)
+	}
+}
+
+// TestReplayDeleteRemapsIDTable is TestDeleteRemapsIDTable's replay half. The
+// table replay rebuilds has to be keyed on the compacted positions, not the
+// ones that were valid during the walk.
+func TestReplayDeleteRemapsIDTable(t *testing.T) {
+	path := t.TempDir() + "/remap.nsq"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := mustCollection(t, db, "users")
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		if _, err := c.Insert(map[string]any{"_id": id, "v": 1}); err != nil {
+			t.Fatalf("Insert %s: %v", id, err)
+		}
+	}
+	// Two deletes from the middle, so the survivors shift by different amounts.
+	for _, id := range []string{"b", "d"} {
+		if _, err := c.Delete(map[string]any{"_id": id}); err != nil {
+			t.Fatalf("Delete %s: %v", id, err)
+		}
+	}
+
+	db = reopen(t, db, path)
+	c = mustCollection(t, db, "users")
+
+	if ids := findIDs(t, c); !equalStrings(ids, []string{"a", "c", "e"}) {
+		t.Fatalf("ids after reopen = %v, want [a c e]", ids)
+	}
+	// Every surviving _id must still resolve to its own document.
+	for _, id := range []string{"a", "c", "e"} {
+		if _, err := c.Insert(map[string]any{"_id": id}); !errors.Is(err, ErrDuplicateID) {
+			t.Errorf("Insert %q after reopen: err = %v, want ErrDuplicateID", id, err)
+		}
+	}
+	// And the deleted ones must be free.
+	for _, id := range []string{"b", "d"} {
+		if _, err := c.Insert(map[string]any{"_id": id}); err != nil {
+			t.Errorf("re-inserting deleted %q after reopen: %v", id, err)
+		}
+	}
+}
+
+// TestReplayDeleteUnderFastOpen guards the mustRead rule: WithFastOpen skips
+// payloads to save the CRC pass, but a tombstone's payload is the only place
+// its _id appears.
+func TestReplayDeleteUnderFastOpen(t *testing.T) {
+	path := t.TempDir() + "/fast.nsq"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := mustCollection(t, db, "users")
+	for _, id := range []string{"a", "b", "c"} {
+		if _, err := c.Insert(map[string]any{"_id": id, "v": 0}); err != nil {
+			t.Fatalf("Insert %s: %v", id, err)
+		}
+	}
+	if _, err := c.Delete(map[string]any{"_id": "a"}); err != nil {
+		t.Fatalf("Delete a: %v", err)
+	}
+	// An insert AFTER the delete, so the fast path also has to keep the idTable
+	// current for records whose payload it would otherwise skip.
+	if _, err := c.Insert(map[string]any{"_id": "d", "v": 0}); err != nil {
+		t.Fatalf("Insert d: %v", err)
+	}
+	if _, err := c.Delete(map[string]any{"_id": "d"}); err != nil {
+		t.Fatalf("Delete d: %v", err)
+	}
+
+	db = reopen(t, db, path, WithFastOpen())
+	c = mustCollection(t, db, "users")
+
+	if ids := findIDs(t, c); !equalStrings(ids, []string{"b", "c"}) {
+		t.Errorf("ids after fast reopen = %v, want [b c]", ids)
+	}
+}
+
+// TestReplayDeleteAndReplaceInterleaved runs both mutation ops over the same
+// collection, which is the case where a marked slot and a re-pointed slot have
+// to coexist for the rest of the walk.
+func TestReplayDeleteAndReplaceInterleaved(t *testing.T) {
+	path := t.TempDir() + "/mixed.nsq"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := mustCollection(t, db, "users")
+	for _, id := range []string{"a", "b", "c", "d"} {
+		if _, err := c.Insert(map[string]any{"_id": id, "v": 0}); err != nil {
+			t.Fatalf("Insert %s: %v", id, err)
+		}
+	}
+	if _, err := c.Replace(map[string]any{"_id": "b"}, map[string]any{"v": 7}); err != nil {
+		t.Fatalf("Replace b: %v", err)
+	}
+	if _, err := c.Delete(map[string]any{"_id": "a"}); err != nil {
+		t.Fatalf("Delete a: %v", err)
+	}
+	// Replacing a document that sits AFTER the deleted one, so its slot has
+	// already shifted on the live path but has not yet on the replay path.
+	if _, err := c.Replace(map[string]any{"_id": "d"}, map[string]any{"v": 9}); err != nil {
+		t.Fatalf("Replace d: %v", err)
+	}
+	if _, err := c.Delete(map[string]any{"_id": "c"}); err != nil {
+		t.Fatalf("Delete c: %v", err)
+	}
+	wantDead := db.DeadBytes()
+
+	db = reopen(t, db, path)
+	c = mustCollection(t, db, "users")
+
+	if ids := findIDs(t, c); !equalStrings(ids, []string{"b", "d"}) {
+		t.Fatalf("ids after reopen = %v, want [b d]", ids)
+	}
+	for id, want := range map[string]float64{"b": 7, "d": 9} {
+		got, err := c.FindOne(map[string]any{"_id": id})
+		if err != nil {
+			t.Fatalf("FindOne %s: %v", id, err)
+		}
+		if got == nil || got["v"] != want {
+			t.Errorf("%s after reopen = %v, want v=%v", id, got, want)
+		}
+	}
+	if got := db.DeadBytes(); got != wantDead {
+		t.Errorf("DeadBytes after reopen = %d, want %d", got, wantDead)
+	}
+}
+
+// TestReplayDeleteEveryDocument is the degenerate case: an empty collection
+// rebuilt from a file full of records.
+func TestReplayDeleteEveryDocument(t *testing.T) {
+	path := t.TempDir() + "/empty.nsq"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := mustCollection(t, db, "users")
+	seedPeople(t, c, 5)
+	if n, err := c.DeleteMany(nil); err != nil || n != 5 {
+		t.Fatalf("DeleteMany = (%d, %v), want (5, nil)", n, err)
+	}
+
+	db = reopen(t, db, path)
+	c = mustCollection(t, db, "users")
+
+	if got := c.Len(); got != 0 {
+		t.Errorf("Len after reopen = %d, want 0", got)
+	}
+	if ids := findIDs(t, c); len(ids) != 0 {
+		t.Errorf("ids after reopen = %v, want none", ids)
+	}
+	// The collection still exists: only its documents went.
+	if _, err := c.Insert(map[string]any{"_id": "fresh"}); err != nil {
+		t.Errorf("Insert into the emptied collection: %v", err)
+	}
+}
+
+// TestReplayDeleteIsIdempotentAcrossReopens checks the numbers stay stable when
+// a file is opened, deleted from, and reopened repeatedly.
+func TestReplayDeleteIsIdempotentAcrossReopens(t *testing.T) {
+	path := t.TempDir() + "/repeat.nsq"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := mustCollection(t, db, "users")
+	for i := 0; i < 4; i++ {
+		if _, err := c.Insert(map[string]any{"_id": fmt.Sprintf("p%d", i)}); err != nil {
+			t.Fatalf("Insert p%d: %v", i, err)
+		}
+	}
+
+	for round := 0; round < 4; round++ {
+		if _, err := c.Delete(map[string]any{"_id": fmt.Sprintf("p%d", round)}); err != nil {
+			t.Fatalf("Delete round %d: %v", round, err)
+		}
+		liveDead := db.DeadBytes()
+		wantLen := 3 - round
+
+		db = reopen(t, db, path)
+		c = mustCollection(t, db, "users")
+
+		if got := db.DeadBytes(); got != liveDead {
+			t.Errorf("round %d: DeadBytes after reopen = %d, want %d", round, got, liveDead)
+		}
+		if got := c.Len(); got != wantLen {
+			t.Errorf("round %d: Len = %d, want %d", round, got, wantLen)
+		}
+	}
+}
+
+// TestDeleteThenReopenAgreesWithScanLive ties the replayed counter back to the
+// offline reconstruction, now that both sides can see the file.
+func TestDeleteThenReopenAgreesWithScanLive(t *testing.T) {
+	path := t.TempDir() + "/agree.nsq"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := mustCollection(t, db, "users")
+	for _, id := range []string{"a", "b", "c"} {
+		if _, err := c.Insert(map[string]any{"_id": id, "pad": "0123456789"}); err != nil {
+			t.Fatalf("Insert %s: %v", id, err)
+		}
+	}
+	if _, err := c.Replace(map[string]any{"_id": "a"}, map[string]any{"v": 1}); err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	if _, err := c.Delete(map[string]any{"_id": "b"}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	db = reopen(t, db, path)
+	replayed := db.DeadBytes()
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	stats, err := ScanLive(path)
+	if err != nil {
+		t.Fatalf("ScanLive: %v", err)
+	}
+	if stats.Dead != replayed {
+		t.Errorf("replay computed %d dead bytes, ScanLive says %d", replayed, stats.Dead)
+	}
+}
+
+// TestReplayRejectsTombstoneForUnknownID pins the corruption rule. Delete never
+// writes a tombstone for a document that is not there, so a file containing one
+// disagrees with itself and Open refuses rather than guessing — the same answer
+// replay gives an unresolvable replace.
+//
+// This is the one case that still has to be built below the API, because the
+// API cannot produce it.
+func TestReplayRejectsTombstoneForUnknownID(t *testing.T) {
+	path := t.TempDir() + "/liar.nsq"
+	db, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	c := mustCollection(t, db, "users")
+	if _, err := c.Insert(map[string]any{"_id": "a"}); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	db.mu.Lock()
+	_, _, err = db.appendRecord(opDelete, c.id, []byte(`{"_id":"ghost"}`))
+	db.mu.Unlock()
+	if err != nil {
+		t.Fatalf("appendRecord: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	reopened, err := Open(path)
+	if err == nil {
+		reopened.Close()
+		t.Fatal("Open accepted a tombstone naming a document the collection does not contain")
+	}
+	if !errors.Is(err, ErrCorrupt) {
+		t.Errorf("Open: err = %v, want ErrCorrupt", err)
+	}
+}

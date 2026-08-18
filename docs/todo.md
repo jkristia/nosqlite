@@ -15,40 +15,50 @@ file wins; where they disagree about mechanism, §11 does.
 
 ---
 
-## 1. Delete
+## 1. Delete — bindings and conformance
 
-Steps 6 and 7 of [`updates-and-compaction.md`](updates-and-compaction.md) §8, and
-the other half of the replace machinery that is already in place.
+The Go engine is done: `Delete`/`DeleteMany`, and replay of the `op=2` records they
+write. What is left is carrying it across the boundary, which is how `Replace`
+landed too — the engine in one commit, the bindings and the shared corpus in the
+next.
 
-- [ ] `op=2` write path: `Delete` / `DeleteMany` = tombstone + slot removal +
-      idTable rebuild (§6.3). Unlike `Replace`, `DeleteMany` earns its plural —
-      deleting many documents is genuinely one operation (§8.1).
-- [ ] Replay applies `op=2` by mark-then-compact (§6.4).
+- [ ] `nsq_delete` / `nsq_delete_many` in `capi/capi.go`, replying `{"deleted": n}`.
+      Follow `nsq_count`'s shape, which already takes exactly `(handle, coll,
+      filterJSON)`. `nsq_delete_many` should report its count alongside the error on
+      a partial batch, as `nsq_insert_many` does — `DeleteMany` returns how many
+      tombstones actually landed, and that number is the one to trust when the call
+      failed.
+- [ ] TypeScript: `ffi.ts` declarations and wrappers, then `delete` / `deleteMany`
+      on `Collection`. `delete` is a reserved word as a bare identifier but legal as
+      a method name — it does not need renaming to `remove`.
+- [ ] Python: `_lib.py` argtypes and wrappers, then `delete` / `delete_many`.
 - [ ] Conformance cases in `testdata/cases/mutate/delete/`.
 
-Separate commits per §8. The tombstone payload is assumed to be `{"_id":"..."}` — a
-JSON document, not a bare string. `ScanLive` and `store_test.go`'s
-`TestScanLiveCountsSupersededRecords` already rely on that shape.
-
-**The trap:** delete *moves* documents. Later slots shift down, so the idTable must
-be rebuilt, and §6.3's linear-probing hazard is where this goes wrong. Replace had no
-equivalent — it left every position untouched.
-
-**Conformance is already ready for it.** Add `"delete"` to `query.schema.json`'s `op`
-enum and one arm to each of the three runners' `applyMutation`; sequencing, `matched`
-and `error` all work unchanged. Two things to get right, both learned from replace:
+**Conformance is already ready for it.** The op names are settled: `"delete"` and
+`"delete_many"`, added to `query.schema.json`'s `op` enum, with one arm in each of
+the three runners' `applyMutation`. Sequencing, `matched` and `error` all work
+unchanged; `document` is already optional in the schema, so a delete mutation
+validates as soon as the enum admits it. Two things to get right, both learned from
+replace:
 
 - a case shaped as a no-op needs its `matched` or `error` to carry the assertion —
   the query alone cannot fail
 - assert insertion **order** afterwards, not just membership, since that is precisely
   the property delete does not preserve
 
+**Worth adding while in there:** an `"insert"` op. §6.5 of
+[`updates-and-compaction.md`](updates-and-compaction.md) — delete, then re-insert the
+same `_id` — is the sharpest delete behaviour there is, and it cannot be expressed in
+the corpus today because a case can only insert through its dataset. It is about
+three lines per runner.
+
 ---
 
 ## 2. Compaction
 
-Step 8. Not optional once delete lands: `nsq stat` already prints "consider
-`nsq compact <path>`" for a verb that does not exist yet.
+Step 8. Not optional now that delete has landed: `nsq stat` already prints "consider
+`nsq compact <path>`" for a verb that does not exist yet, and a delete makes the file
+bigger until it does.
 
 - [ ] `Compact()` rewrites the file keeping only live versions, regrouped by
       collection so scan locality is restored.
@@ -126,7 +136,8 @@ indexed field into a lookup, with the rest as a residual filter.
 **Already decided by the design:** indexes rebuild from the log on open — nothing new
 on disk, so no new op code and no `formatVersion` question. The existing lazy
 `idTable` is the precedent to generalise: it is already a secondary index on `_id`,
-built on first need.
+built on first need, and `removeIndex`'s remap is the precedent for what a delete
+costs any index keyed on slot position.
 
 Settle before writing code:
 
@@ -185,10 +196,14 @@ No position in the order yet.
       or corrupt files is a natural target. Cheap, and this is a storage engine.
 - [ ] **`Update(filter, {$set: ...})`** — the operator-style sibling of `Replace`.
       The name is deliberately still free.
+- [ ] **`Replace` returns 0 on a failed sync.** If `syncIfNeeded` fails after the
+      index has already been updated, `Replace` reports `(0, err)` even though the
+      document was replaced in memory. `DeleteMany` deliberately does not copy this,
+      returning what actually landed; `Replace` should be brought into line.
 - [ ] **Partial parsing** — §11 item 4, the single biggest scan-speed win available.
       Worth much more once projections (item 3) land: `RequiredPaths()` can then be
       filter-fields ∪ projected-fields, so even a matching document never needs a
       full decode.
 - [ ] Quick-start examples in `README.md`, both binding module docstrings and
-      `examples/basic/*` still show only insert and find. Adding `Replace` means
-      doing all three languages, since they are kept parallel.
+      `examples/basic/*` still show only insert and find. Adding `Replace` and
+      `Delete` means doing all three languages, since they are kept parallel.

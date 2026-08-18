@@ -8,13 +8,13 @@ Python and TypeScript.
 [`docs/getting-started.md`](docs/getting-started.md) is the step-by-step: what to
 install, in what order, and how to tell it worked.
 
-**v1 supports insert, query** (filter / sort / skip / limit) **and replace** — the
-whole-document overwrite; delete and compaction are still to come. See
+**v1 supports insert, query** (filter / sort / skip / limit)**, replace** — the
+whole-document overwrite — **and delete**; compaction is still to come. See
 [`docs/design.md`](docs/design.md) for the full design,
 [`docs/file-format.md`](docs/file-format.md) for what is on disk and how a
 collection scans its own records,
-[`docs/updates-and-compaction.md`](docs/updates-and-compaction.md) for how replace
-works on an append-only file and how delete and compaction will,
+[`docs/updates-and-compaction.md`](docs/updates-and-compaction.md) for how replace and
+delete work on an append-only file and how compaction will,
 [`docs/matcher.md`](docs/matcher.md) for
 how filters compile and match, [`docs/testing.md`](docs/testing.md) for how unit,
 conformance, and scale tests are organized across the three languages, and
@@ -224,7 +224,7 @@ guessing.
 
 ## What it does not do
 
-Updates, deletes, projections, aggregation, secondary indexes, transactions,
+Field updates (`$set`), projections, aggregation, secondary indexes, transactions,
 multi-document atomicity, networking. **And no multi-process access**: there is
 no file lock, so two processes opening the same file will corrupt it. Each of
 these has a named extension point in the design doc; §11 there is the ordered

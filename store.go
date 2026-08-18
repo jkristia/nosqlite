@@ -61,13 +61,13 @@ const (
 	maxPayloadSize = 64 << 20 // 64 MB
 )
 
-// Record operation codes. Values 2, 5 and 6 are *reserved*: nothing writes them
+// Record operation codes. Values 5 and 6 are *reserved*: nothing writes them
 // yet, and reading one is a hard error rather than a skip, so an old binary
 // fails loudly against a file written by a newer one instead of silently
-// ignoring its deletes.
+// ignoring its transactions.
 const (
 	opInsert           uint8 = 1 // payload is the document JSON
-	opDelete           uint8 = 2 // reserved: payload would be the _id
+	opDelete           uint8 = 2 // payload is {"_id":"…"} — a tombstone, not a document
 	opReplace          uint8 = 3 // payload is the new document, in full
 	opDefineCollection uint8 = 4 // payload is {"id":7,"name":"users"}
 	opBegin            uint8 = 5 // reserved: multi-document atomicity
@@ -316,6 +316,13 @@ func (db *DB) replay(fileSize int64) error {
 
 	off := int64(headerSize) // offset of the record we are about to read
 
+	// Collections a tombstone has marked slots in. Replay applies deletes by
+	// marking rather than removing (see applyDeleteReplay), so the marks are
+	// compacted out once the walk is over. Keyed by collection id, so repeated
+	// deletes into one collection dedupe for free, and left nil for the common
+	// case of a file nothing was ever deleted from.
+	var pendingCompaction map[uint16]*Collection
+
 	for {
 		// io.ReadFull returns:
 		//   io.EOF              nothing left at all -> clean end of file
@@ -359,11 +366,12 @@ func (db *DB) replay(fileSize int64) error {
 		// Read (or skip) the payload.
 		//
 		// Define-collection records are always read: we need their contents. So
-		// are replaces, whose whole job is to name an _id. Under WithFastOpen
-		// everything else is skipped without a CRC check, except the final
-		// record, which still gets checked so torn-tail recovery keeps working.
+		// are replaces and deletes, whose whole job is to name an _id. Under
+		// WithFastOpen everything else is skipped without a CRC check, except the
+		// final record, which still gets checked so torn-tail recovery keeps
+		// working.
 		mustRead := !db.cfg.fastOpen || isLast ||
-			op == opDefineCollection || op == opReplace
+			op == opDefineCollection || op == opReplace || op == opDelete
 		if !mustRead && op == opInsert {
 			// An insert into a collection whose idTable has already been built
 			// has to go into that table, which means knowing its _id, which
@@ -441,7 +449,21 @@ func (db *DB) replay(fileSize int64) error {
 				return err
 			}
 
-		case opDelete, opBegin, opCommit:
+		case opDelete:
+			c, ok := db.byID[coll]
+			if !ok {
+				return fmt.Errorf("%w: delete at %d names undefined collection id %d",
+					ErrCorrupt, off, coll)
+			}
+			if err := db.applyDeleteReplay(c, off, length, payload); err != nil {
+				return err
+			}
+			if pendingCompaction == nil {
+				pendingCompaction = map[uint16]*Collection{}
+			}
+			pendingCompaction[coll] = c
+
+		case opBegin, opCommit:
 			return fmt.Errorf("nosqlite: record at %d uses %s, which this version does not support "+
 				"(file written by a newer nosqlite?)", off, opName(op))
 		default:
@@ -452,6 +474,14 @@ func (db *DB) replay(fileSize int64) error {
 	}
 
 	db.size = off
+
+	// Phase two of the mark-then-compact rule. Nothing shifted during the walk,
+	// so every position stayed valid throughout; now the marked slots come out
+	// in a single pass per collection and each id table is rebuilt around the
+	// survivors. See docs/updates-and-compaction.md §6.4.
+	for _, c := range pendingCompaction {
+		c.compactMarkedSlots()
+	}
 	return nil
 }
 
@@ -503,6 +533,72 @@ func (db *DB) applyReplay(c *Collection, off int64, length uint32, payload []byt
 
 	// The _id and the position are both unchanged, so the idTable still maps
 	// correctly and needs no update.
+
+	// The file now holds records this collection's index does not point at, so
+	// the sequential scan path is no longer equivalent to the index.
+	c.dirty = true
+	return nil
+}
+
+// applyDeleteReplay applies one op=2 record during replay: it marks the slot
+// holding the document the tombstone names.
+//
+// It MARKS rather than removes, and that is the whole subtlety. Removing a slot
+// mid-walk would shift every later slot down while the idTable resolving _ids is
+// keyed by slot number, so a position recorded before the delete and one
+// recorded after it would mean different things. Setting the length to zero
+// leaves every position valid for the rest of the walk, and replay compacts the
+// marks out in one pass at the end.
+//
+// The stale idTable entry is deliberately left in place rather than removed:
+// removing one would break the linear probe chain behind it, and there is no
+// spare sentinel to mark a hole with. lookupID skips zero-length slots instead,
+// which is also what lets a later insert of the same _id resolve to the new
+// document rather than to the dead one. See docs/updates-and-compaction.md §6.3
+// and §6.4.
+//
+// Called only from replay, which runs inside Open before any other goroutine can
+// reach this DB.
+func (db *DB) applyDeleteReplay(c *Collection, off int64, length uint32, payload []byte) error {
+	id, err := payloadID(payload)
+	if err != nil {
+		return fmt.Errorf("%w: delete at %d has undecodable payload: %v", ErrCorrupt, off, err)
+	}
+	if id == "" {
+		return fmt.Errorf("%w: delete at %d names no _id", ErrCorrupt, off)
+	}
+
+	// No-op after the first replace or delete for this collection.
+	if err := c.ensureIDTable(); err != nil {
+		return err
+	}
+	pos, found, err := c.lookupID(id)
+	if err != nil {
+		return err
+	}
+	if !found {
+		// Delete resolves its match before writing anything, so it never emits a
+		// tombstone for a document that was not there. A miss therefore means the
+		// file disagrees with itself, exactly as it does for a replace.
+		return fmt.Errorf("%w: delete at %d names _id %q, which %s does not contain",
+			ErrCorrupt, off, id, c.name)
+	}
+
+	// Read the superseded record's length before the mark overwrites it. Both
+	// terms count: the document is abandoned, and the tombstone is garbage from
+	// the moment it is written, since nothing ever points at it.
+	db.dead += recordHeaderSize + int64(c.lengths[pos])
+	db.dead += recordHeaderSize + int64(length)
+
+	// db.total is a document count, and this removes a document. Doing it here
+	// rather than in the end-of-replay pass keeps it a single decrement per
+	// tombstone; the pass only takes out slots already accounted for.
+	db.total--
+
+	// Assigning in place is safe here and nowhere else, for the reason
+	// applyReplay gives: replay runs before the DB is handed to the caller, so
+	// no snapshot exists and index.go's immutability rule has nobody to protect.
+	c.lengths[pos] = 0
 
 	// The file now holds records this collection's index does not point at, so
 	// the sequential scan path is no longer equivalent to the index.
