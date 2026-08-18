@@ -128,6 +128,109 @@ func (c *Collection) replaceIndex(i int, payloadOffset int64, payloadLength uint
 	c.offsets, c.lengths = offsets, lengths
 }
 
+// removeIndex drops the documents at the given positions.
+//
+// positions must be ascending and free of duplicates. findAllLocked produces
+// exactly that, because both read shapes visit index positions in order.
+//
+// This is replaceIndex's escape hatch used for the other reason: removing a slot
+// shifts every later slot down by one, so it changes values readers can already
+// see just as re-pointing one does. Building fresh arrays and publishing them
+// under the write lock leaves every array a reader is holding untouched, so an
+// in-flight scan keeps describing the collection as it was before the delete.
+//
+// The slot is removed outright rather than tombstoned, which is what keeps
+// Len() exactly len(c.offsets) and Count(nil) O(1). The shift costs nothing
+// extra: both arrays are being copied anyway. See
+// docs/updates-and-compaction.md §6.3.
+//
+// Caller must hold db.mu for writing.
+func (c *Collection) removeIndex(positions []int) {
+	if len(positions) == 0 {
+		return
+	}
+	n := len(c.offsets)
+
+	// mapping[old] is the position that document ends up at, or -1 if it is
+	// being removed. Built once and used twice — for the arrays here and for the
+	// id table below — which is cheaper than searching positions per entry.
+	mapping := make([]int32, n)
+	next := int32(0)
+	p := 0
+	for i := 0; i < n; i++ {
+		if p < len(positions) && positions[p] == i {
+			mapping[i] = -1
+			p++
+			continue
+		}
+		mapping[i] = next
+		next++
+	}
+
+	offsets := make([]int64, next)
+	lengths := make([]uint32, next)
+	for i := 0; i < n; i++ {
+		if mapping[i] < 0 {
+			continue
+		}
+		offsets[mapping[i]] = c.offsets[i]
+		lengths[mapping[i]] = c.lengths[i]
+	}
+
+	c.offsets, c.lengths = offsets, lengths
+	c.remapIDTable(mapping)
+}
+
+// remapIDTable rebuilds the _id table after slot positions have moved.
+//
+// Rebuilding rather than patching is forced, not a preference. The table is
+// open-addressed with linear probing and forEachCandidate stops at a zero
+// fingerprint, so zeroing one entry makes every entry behind it in the same
+// probe chain unreachable. There is no spare value to mark a hole with either:
+// fingerprint folds 0 to 1, so 1 is a legitimate fingerprint. See
+// docs/updates-and-compaction.md §6.3.
+//
+// It costs no I/O, which is the part worth knowing. The table stores
+// fingerprints rather than _id strings, and every document has exactly one
+// entry, so the survivors can be re-inserted straight at their new positions.
+// Going through ensureIDTable would re-read every document in the collection.
+//
+// mapping[old] is the new position, or -1 for a document that is gone.
+// Caller must hold db.mu for writing.
+func (c *Collection) remapIDTable(mapping []int32) {
+	if c.ids == nil {
+		return
+	}
+	table := newIDTable(len(c.offsets) + 16)
+	for i, fp := range c.ids.fingerprints {
+		if fp == 0 {
+			continue
+		}
+		if to := mapping[c.ids.positions[i]]; to >= 0 {
+			table.insert(fp, uint32(to))
+		}
+	}
+	c.ids = table
+}
+
+// compactMarkedSlots removes every slot replay marked dead with a zero length.
+//
+// Replay applies deletes by marking rather than removing, so that slot numbers
+// stay valid for the rest of the walk while the id table resolving _ids is
+// keyed by them; this is the second phase that runs once at the end. See
+// docs/updates-and-compaction.md §6.4.
+//
+// Caller must hold db.mu for writing.
+func (c *Collection) compactMarkedSlots() {
+	var positions []int
+	for i, length := range c.lengths {
+		if length == 0 {
+			positions = append(positions, i)
+		}
+	}
+	c.removeIndex(positions)
+}
+
 // snapshot is a consistent point-in-time view of a collection, taken under the
 // read lock and then used with no lock held at all.
 //
@@ -147,7 +250,7 @@ type snapshot struct {
 	offsets []int64
 	lengths []uint32
 	size    int64 // file size at snapshot time
-	total   int   // total insert records in the whole file, for the read-shape heuristic
+	total   int   // live documents across the whole database, for the read-shape heuristic
 	dirty   bool  // this collection has superseded records in the file; see Collection.dirty
 }
 
@@ -351,6 +454,15 @@ func (c *Collection) lookupID(id string) (pos int, found bool, err error) {
 	}
 	pos = -1
 	c.ids.forEachCandidate(fingerprint(id), func(candidate uint32) bool {
+		if c.lengths[candidate] == 0 {
+			// A zero length is replay's mark for a document a tombstone has
+			// removed but the end-of-replay compaction has not dropped yet. It
+			// is not a document at all, so keep probing rather than reading it:
+			// idAt would unmarshal an empty payload and fail, and Open would
+			// reject a perfectly good file. Published arrays never hold one,
+			// since removeIndex takes the slot out instead of zeroing it.
+			return false
+		}
 		got, readErr := c.idAt(int(candidate))
 		if readErr != nil {
 			err = readErr

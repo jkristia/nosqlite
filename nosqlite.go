@@ -18,13 +18,14 @@
 //
 // # Scope
 //
-// Insert, query (filter / sort / skip / limit), and Replace. No deletes,
+// Insert, query (filter / sort / skip / limit), Replace and Delete. No
 // projections or secondary indexes yet — see docs/design.md.
 //
-// Replace appends a new record and leaves the old one in the file; the space it
-// holds is reported by DB.DeadBytes and reclaimed only by compaction, which is
-// not implemented. A database that is replaced in repeatedly therefore grows
-// without bound.
+// Replace and Delete append a record and leave the old one in the file; the
+// space it holds is reported by DB.DeadBytes and reclaimed only by compaction,
+// which is not implemented. A database that is written to repeatedly therefore
+// grows without bound — and note that this makes Delete a way to make the file
+// bigger, not smaller.
 //
 // # Numbers are float64
 //
@@ -235,7 +236,7 @@ type DB struct {
 	catalog map[string]*Collection // name  -> collection
 	byID    map[uint16]*Collection // id    -> collection (used during replay)
 	nextID  uint16                 // next collection id to hand out; ids start at 1
-	total   int                    // total insert records in the whole file
+	total   int                    // live documents across the whole database
 
 	// dead is how many bytes of the file are occupied by records that a later
 	// replace or delete has superseded, plus the delete tombstones themselves.
@@ -339,8 +340,8 @@ func (db *DB) Path() string { return db.path }
 // DeadBytes returns how many bytes of the file are held by records that a later
 // replace or delete superseded. Compact reclaims them; nothing else does.
 //
-// It is always 0 until replace and delete exist, and 0 immediately after a
-// Compact. Comparing it against Size is the signal for whether compaction is
+// It is 0 for a file nothing has been replaced in or deleted from, and 0
+// immediately after a Compact. Comparing it against Size is the signal for whether compaction is
 // worth running — see `nsq stat`, which reports the same ratio offline.
 func (db *DB) DeadBytes() int64 {
 	db.mu.RLock()

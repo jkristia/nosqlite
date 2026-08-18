@@ -290,6 +290,145 @@ func (c *Collection) Replace(filter, doc map[string]any) (int, error) {
 	return 1, nil
 }
 
+// Delete removes the first document matching filter, and returns how many
+// documents were deleted — 1, or 0 when nothing matched.
+//
+// "First" means insertion order, the same order FindOne uses. Removing more
+// than one document at a time is DeleteMany, and the split is deliberate: a
+// filter that matches more than you meant is the one mistake in this API with
+// no undo, so the wider operation is the one you have to type more to get.
+// MongoDB separates deleteOne and deleteMany for the same reason.
+//
+// On disk this appends a tombstone naming the document's _id and leaves the
+// document itself exactly where it was, so a delete makes the file BIGGER
+// rather than smaller. Both the abandoned document and the tombstone are
+// counted by DB.DeadBytes and reclaimed only by Compact.
+//
+// Deleting frees the _id: inserting a new document under it afterwards is
+// allowed and does not collide.
+func (c *Collection) Delete(filter map[string]any) (int, error) {
+	return c.deleteMatching(filter, 1)
+}
+
+// DeleteMany removes every document matching filter and returns how many were
+// deleted.
+//
+// This is the one place a Many verb takes a filter rather than a slice, and it
+// is why there is no ReplaceMany: deleting many documents is genuinely one
+// operation, whereas replacing many with a single document is not.
+//
+// It is NOT atomic. The tombstones are written together, but a crash can leave
+// a prefix of them on disk, so some documents are deleted and the rest survive.
+// The returned count is how many actually landed — the number to trust when err
+// is non-nil.
+//
+// An empty filter matches everything and empties the collection. There is no
+// confirmation step and no undo.
+func (c *Collection) DeleteMany(filter map[string]any) (int, error) {
+	return c.deleteMatching(filter, 0)
+}
+
+// deleteMatching is the shared body of Delete and DeleteMany. limit caps how
+// many documents may be removed; limit <= 0 means every match.
+func (c *Collection) deleteMatching(filter map[string]any, limit int) (int, error) {
+	// Compile before taking the lock, as Replace does: a bad filter should cost
+	// no one else any waiting.
+	matcher, err := CompileFilter(filter)
+	if err != nil {
+		return 0, err
+	}
+
+	started := time.Now()
+
+	db := c.db
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.closed {
+		return 0, ErrClosed
+	}
+
+	positions, ids, err := c.findAllLocked(matcher, limit)
+	if err != nil {
+		return 0, err
+	}
+	if len(positions) == 0 {
+		// A delete that matched nothing writes nothing at all. The scan above
+		// has already answered "is it there", so resolving first costs nothing —
+		// and a tombstone for a document that was never present would be garbage
+		// Compact has to collect on behalf of a delete that deleted nothing.
+		if limit == 1 {
+			db.traceDelete(c.name, "", 0, 0, started, nil)
+		} else {
+			db.traceDeleteMany(c.name, 0, db.size, 0, started, nil)
+		}
+		return 0, nil
+	}
+
+	payloads := make([][]byte, len(ids))
+	for i, id := range ids {
+		payload, err := encodeTombstone(id)
+		if err != nil {
+			return 0, err
+		}
+		payloads[i] = payload
+	}
+
+	// One write and one fsync for the whole set, exactly as InsertMany does. A
+	// single Delete goes through the same path as a batch of one, which costs
+	// one small slice and saves a second write path.
+	firstOff := db.size
+	_, written, writeErr := db.appendBatch(opDelete, c.id, payloads)
+
+	if written > 0 {
+		// appendBatch is not atomic and writes in order, so the tombstones that
+		// landed are the prefix. Only those documents may leave the index: a
+		// reader must never stop seeing a document whose tombstone failed to
+		// write. positions is ascending, so the prefix is too, which is what
+		// removeIndex requires.
+		removed := positions[:written]
+		for i, pos := range removed {
+			// Read the superseded record's length before the slot goes away.
+			//
+			// The tombstone counts as dead the moment it is written: nothing
+			// ever points at it, and Compact drops it along with the document it
+			// killed. That second term is what makes a delete cost MORE bytes
+			// than it reclaims until the next Compact, and it is what keeps this
+			// counter equal to what ScanLive reconstructs from the file alone.
+			db.dead += recordHeaderSize + int64(c.lengths[pos])
+			db.dead += recordHeaderSize + int64(len(payloads[i]))
+		}
+
+		c.removeIndex(removed)
+
+		// Unlike a replace, a delete really does change the document count, and
+		// db.total is a document count — the denominator of the read-shape
+		// ratio in scan.go and the docs= figure traceOpen reports.
+		db.total -= len(removed)
+
+		// From here on this collection has records in the file that the index no
+		// longer points at, so scanSequential — which re-derives membership from
+		// the file — would hand back the deleted documents. See scan.go.
+		c.dirty = true
+	}
+
+	syncErr := db.syncIfNeeded()
+	err = writeErr
+	if err == nil {
+		err = syncErr
+	}
+
+	if limit == 1 {
+		id := ""
+		if written > 0 {
+			id = ids[0]
+		}
+		db.traceDelete(c.name, id, firstOff, int(db.size-firstOff), started, err)
+	} else {
+		db.traceDeleteMany(c.name, written, firstOff, int(db.size-firstOff), started, err)
+	}
+	return written, err
+}
+
 // findFirstLocked returns the index position of the first document matching m,
 // or -1 if none does.
 //
@@ -323,6 +462,48 @@ func (c *Collection) findFirstLocked(m Matcher) (int, error) {
 	return pos, nil
 }
 
+// findAllLocked returns the index positions of every document matching m,
+// together with each one's _id, in insertion order. limit <= 0 means "every
+// match".
+//
+// The _ids come back alongside the positions because the scan has already
+// unmarshalled each payload to run the filter over it. Fetching them afterwards
+// through idAt would be one extra ReadAt per match, for bytes that were in hand
+// a moment ago.
+//
+// The positions are ascending and unique, which is what removeIndex requires:
+// both read shapes visit index positions in order, for the reason
+// findFirstLocked describes.
+//
+// Caller must hold db.mu.
+func (c *Collection) findAllLocked(m Matcher, limit int) (positions []int, ids []string, err error) {
+	scratch := make(map[string]any)
+
+	err = c.scanRecords(c.snapshotLocked(), func(i int, payload []byte) (bool, error) {
+		clear(scratch)
+		if err := json.Unmarshal(payload, &scratch); err != nil {
+			return false, fmt.Errorf("nosqlite: decoding document in %s: %w", c.name, err)
+		}
+		if !m.Match(scratch) {
+			return true, nil
+		}
+		id, _ := scratch["_id"].(string)
+		if id == "" {
+			// Every document this package writes carries a string _id, so this
+			// means the file came from somewhere else. Refuse rather than append
+			// a tombstone that names nothing and would fail on the next Open.
+			return false, fmt.Errorf("nosqlite: document at position %d in %s has no usable _id", i, c.name)
+		}
+		positions = append(positions, i)
+		ids = append(ids, id)
+		return limit <= 0 || len(positions) < limit, nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return positions, ids, nil
+}
+
 // documentID returns the _id doc carries, or "" when it has none. It is an
 // error for _id to be present but not a usable string.
 func documentID(doc map[string]any) (string, error) {
@@ -354,6 +535,24 @@ func encodeReplacement(doc map[string]any, id string) ([]byte, error) {
 	payload, err := json.Marshal(copied)
 	if err != nil {
 		return nil, fmt.Errorf("nosqlite: encoding replacement: %w", err)
+	}
+	return payload, nil
+}
+
+// encodeTombstone builds a delete record's payload: the _id and nothing else.
+//
+// It is a JSON document rather than a bare id string so that replay and
+// ScanLive can pull the _id out with the same payloadID probe they use on every
+// other record — one shape, one parser.
+//
+// Marshalling rather than concatenating is not fussiness: an _id is any
+// non-empty string, and one containing a quote or a backslash would otherwise
+// produce a record that does not parse, which surfaces as a file that will not
+// open.
+func encodeTombstone(id string) ([]byte, error) {
+	payload, err := json.Marshal(map[string]string{"_id": id})
+	if err != nil {
+		return nil, fmt.Errorf("nosqlite: encoding tombstone: %w", err)
 	}
 	return payload, nil
 }

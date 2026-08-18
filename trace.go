@@ -233,6 +233,40 @@ func (db *DB) traceReplace(coll, id string, off int64, total int, payload []byte
 	db.trace.emit(seq, "REPLACE", coll, details, time.Since(started), err)
 }
 
+// traceDelete reports one Delete. Like traceReplace it still emits a line when
+// nothing matched — "the delete did nothing" is exactly the kind of surprise
+// the trace exists to make visible.
+//
+// There is no doc= detail even under TraceVerbose: a tombstone's payload is
+// just the _id, which the details already name.
+func (db *DB) traceDelete(coll, id string, off int64, total int,
+	started time.Time, err error) {
+
+	if !db.trace.enabled(TraceWrites) {
+		return
+	}
+	seq := db.trace.next()
+	details := "matched=0"
+	if id != "" {
+		details = fmt.Sprintf("_id=%s off=%d len=%d", id, off, total)
+	}
+	db.trace.emit(seq, "DELETE", coll, details, time.Since(started), err)
+}
+
+// traceDeleteMany reports one DeleteMany. It counts rather than naming ids,
+// following traceInsertMany: one call can remove thousands of documents and the
+// trace is one line per operation.
+func (db *DB) traceDeleteMany(coll string, count int, off int64, total int,
+	started time.Time, err error) {
+
+	if !db.trace.enabled(TraceWrites) {
+		return
+	}
+	seq := db.trace.next()
+	details := fmt.Sprintf("count=%d off=%d len=%d", count, off, total)
+	db.trace.emit(seq, "DELETEM", coll, details, time.Since(started), err)
+}
+
 func (db *DB) traceInsertMany(coll string, count int, off int64, total int,
 	started time.Time, err error) {
 

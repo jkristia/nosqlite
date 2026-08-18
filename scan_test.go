@@ -48,10 +48,13 @@ func findIDs(t *testing.T, c *Collection) []string {
 // is fine while the two agree — which they do until a replace or delete
 // supersedes a record.
 //
-// The test drops a slot from the index directly, which is what a delete does to
-// it, because that is the shape that makes the two read paths disagree about
-// *which* documents come back rather than merely how many. Replace, which moves
-// a slot instead of removing one, is covered in replace_test.go.
+// The test drops a slot from the index directly rather than calling Delete,
+// because Delete sets dirty — and this test has to run the sequential path over
+// an index the file disagrees with in order to show what the flag prevents.
+// Removing a slot is the shape that makes the two read paths disagree about
+// *which* documents come back rather than merely how many; replace, which moves
+// a slot instead of removing one, is covered in replace_test.go, and the real
+// Delete write path in delete_test.go.
 //
 // Without the dirty flag the sequential path ignores that removal and hands
 // back the superseded document; with it, the strided path reads the index and

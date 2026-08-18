@@ -307,13 +307,13 @@ func itoa(n int) string {
 }
 
 // TestScanLiveCountsSupersededRecords exercises the offline live/dead analysis
-// against a file containing replaces and deletes.
+// against a file holding a replace and a delete.
 //
-// Nothing writes op=2 or op=3 yet, and replay rejects both, so the test builds
-// such a file the only way currently possible: by appending the records
-// directly, below the API. That is deliberate — ScanLive has to be right before
-// the write paths land, since it is how `nsq stat` will report whether
-// compaction is worth running.
+// ScanLive is DB.DeadBytes' cold-file counterpart: it reconstructs the same
+// number by walking the bytes, with no index and no open database, which is how
+// `nsq stat` can report whether compaction is worth running on a file nobody
+// has open. The test asserts the two agree — a number only one of them gets
+// right would be worse than no number at all.
 func TestScanLiveCountsSupersededRecords(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "garbage.nsq")
 	db, err := Open(path)
@@ -332,23 +332,39 @@ func TestScanLiveCountsSupersededRecords(t *testing.T) {
 
 	// Record the sizes of the two records about to be superseded, so the
 	// expected dead-byte total is derived from the file rather than guessed.
-	db.mu.Lock()
+	db.mu.RLock()
 	deadA := recordHeaderSize + int64(c.lengths[0]) // "a", about to be replaced
 	deadB := recordHeaderSize + int64(c.lengths[1]) // "b", about to be deleted
+	db.mu.RUnlock()
 
-	// Replace "a" with a bigger document, then delete "b".
-	replacement := []byte(`{"_id":"a","v":2,"padding":"xxxxxxxxxxxxxxxx"}`)
-	if _, _, err := db.appendRecord(opReplace, c.id, replacement); err != nil {
-		db.mu.Unlock()
-		t.Fatalf("appendRecord replace: %v", err)
+	if _, err := c.Replace(map[string]any{"_id": "a"},
+		map[string]any{"v": 2, "padding": "xxxxxxxxxxxxxxxx"}); err != nil {
+		t.Fatalf("Replace: %v", err)
 	}
-	tombstone := []byte(`{"_id":"b"}`)
-	_, tombstoneTotal, err := db.appendRecord(opDelete, c.id, tombstone)
-	if err != nil {
-		db.mu.Unlock()
-		t.Fatalf("appendRecord delete: %v", err)
+	if _, err := c.Delete(map[string]any{"_id": "b"}); err != nil {
+		t.Fatalf("Delete: %v", err)
 	}
-	db.mu.Unlock()
+	liveDead := db.DeadBytes()
+
+	// The remaining sizes come from the file itself rather than from the index,
+	// which is the whole point: these are the bytes ScanLive will be looking at.
+	recs := readRecords(t, path)
+	replacement := recs[len(recs)-2]
+	tombstone := recs[len(recs)-1]
+	if opName(replacement.Op) != "replace" || opName(tombstone.Op) != "delete" {
+		t.Fatalf("setup: the file holds %v, want it to end [replace delete]", opNames(recs))
+	}
+	tombstoneTotal := recordHeaderSize + int64(len(tombstone.Payload))
+
+	var liveC int64
+	for _, r := range recs {
+		if r.Op == opInsert {
+			if id, _ := payloadID(r.Payload); id == "c" {
+				liveC = recordHeaderSize + int64(len(r.Payload))
+			}
+		}
+	}
+
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -362,14 +378,19 @@ func TestScanLiveCountsSupersededRecords(t *testing.T) {
 	if got := stats.Documents[c.id]; got != 2 {
 		t.Errorf("live documents = %d, want 2", got)
 	}
-	// The old "a", the old "b", and the tombstone that removed "b".
-	wantDead := deadA + deadB + int64(tombstoneTotal)
+	// The old "a", the old "b", and the tombstone that removed "b" — which is
+	// garbage the moment it is written, since nothing ever points at it.
+	wantDead := deadA + deadB + tombstoneTotal
 	if stats.Dead != wantDead {
 		t.Errorf("dead bytes = %d, want %d (old a %d + old b %d + tombstone %d)",
 			stats.Dead, wantDead, deadA, deadB, tombstoneTotal)
 	}
+	// The open database had been keeping the same running total all along.
+	if liveDead != wantDead {
+		t.Errorf("DB.DeadBytes said %d, ScanLive reconstructs %d", liveDead, wantDead)
+	}
 	// Live bytes must be the replacement plus "c", never the superseded pair.
-	wantLive := int64(recordHeaderSize+len(replacement)) + recordHeaderSize + int64(c.lengths[2])
+	wantLive := recordHeaderSize + int64(len(replacement.Payload)) + liveC
 	if stats.Bytes[c.id] != wantLive {
 		t.Errorf("live bytes = %d, want %d", stats.Bytes[c.id], wantLive)
 	}
