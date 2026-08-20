@@ -25,10 +25,11 @@ import (
 // caseQuery mirrors nosqlite.Query, but in a JSON-friendly shape: it names a
 // dataset instead of embedding it, so many cases can share one dataset file.
 type caseQuery struct {
-	Dataset   string         `json:"dataset"`
-	Mutations []caseMutation `json:"mutations"`
-	Filter    map[string]any `json:"filter"`
-	Sort      []struct {
+	Dataset    string         `json:"dataset"`
+	Mutations  []caseMutation `json:"mutations"`
+	Filter     map[string]any `json:"filter"`
+	Projection map[string]any `json:"projection"`
+	Sort       []struct {
 		Field string `json:"field"`
 		Desc  bool   `json:"desc"`
 	} `json:"sort"`
@@ -55,10 +56,14 @@ type caseMutation struct {
 
 // caseExpected is the result every binding must produce for a case's query.
 //
-// Fields/Docs are optional: nosqlite has no projection support, so they don't
-// change the query. They let a case narrow the full documents Find() already
-// returns down to a few fields, purely so expected.json stays readable
-// instead of embedding whole documents.
+// Docs is compared in full when Fields is absent, which is how a case with a
+// `projection` in its query.json checks the shape the engine produced. With
+// Fields set, the runner instead narrows the documents Find() returned down to
+// those field names first — client-side and flat, purely so expected.json stays
+// readable for cases that query whole documents.
+//
+// IDs may be absent, and only then: a projection that drops _id leaves no ids
+// to check, and Docs carries the whole assertion.
 type caseExpected struct {
 	IDs    []string         `json:"ids"`
 	Fields []string         `json:"fields"`
@@ -132,7 +137,7 @@ func runCase(t *testing.T, dir string) {
 		applyMutation(t, coll, i, m)
 	}
 
-	query := nosqlite.Query{Filter: q.Filter, Skip: q.Skip, Limit: q.Limit}
+	query := nosqlite.Query{Filter: q.Filter, Projection: q.Projection, Skip: q.Skip, Limit: q.Limit}
 	for _, s := range q.Sort {
 		query.Sort = append(query.Sort, nosqlite.SortKey{Field: s.Field, Desc: s.Desc})
 	}
@@ -142,22 +147,32 @@ func runCase(t *testing.T, dir string) {
 		t.Fatalf("Find: %v", err)
 	}
 
-	gotIDs := make([]string, len(got))
-	for i, doc := range got {
-		gotIDs[i], _ = doc["_id"].(string)
+	// A nil IDs means expected.json omitted the key, which only a case that
+	// projects _id away may do. An empty-but-present list still gets checked.
+	if want.IDs != nil {
+		gotIDs := make([]string, len(got))
+		for i, doc := range got {
+			gotIDs[i], _ = doc["_id"].(string)
+		}
+		if !idsEqual(gotIDs, want.IDs) {
+			t.Errorf("ids = %v, want %v", gotIDs, want.IDs)
+		}
 	}
 
-	if !idsEqual(gotIDs, want.IDs) {
-		t.Errorf("ids = %v, want %v", gotIDs, want.IDs)
-	}
-
-	if len(want.Fields) > 0 {
+	switch {
+	case len(want.Fields) > 0:
 		gotDocs := make([]map[string]any, len(got))
 		for i, doc := range got {
 			gotDocs[i] = projectFields(doc, want.Fields)
 		}
 		if !reflect.DeepEqual(gotDocs, want.Docs) {
 			t.Errorf("docs = %v, want %v", gotDocs, want.Docs)
+		}
+	case want.Docs != nil:
+		// No `fields` to narrow by, so the documents are compared whole — the
+		// engine's own projection is what produced their shape.
+		if !reflect.DeepEqual(got, want.Docs) {
+			t.Errorf("docs = %v, want %v", got, want.Docs)
 		}
 	}
 }

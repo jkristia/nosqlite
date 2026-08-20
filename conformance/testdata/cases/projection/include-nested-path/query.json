@@ -1,0 +1,7 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "A dotted path rebuilds a partial subdocument rather than flattening the key: address comes back as an object holding only the projected fields.",
+    "dataset": "people",
+    "filter": {"_id": {"$in": ["1", "3"]}},
+    "projection": {"name": 1, "address.city": 1, "address.country": 1}
+}

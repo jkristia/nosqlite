@@ -1,0 +1,7 @@
+{
+    "$schema": "../../../../expected.schema.json",
+    "docs": [
+        {"name": "Ada Turner"},
+        {"name": "Maya Patel"}
+    ]
+}

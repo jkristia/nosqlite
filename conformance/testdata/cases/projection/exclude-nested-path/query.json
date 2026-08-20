@@ -1,0 +1,7 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "A dotted exclusion drops one field out of a subdocument and leaves the rest of it in place.",
+    "dataset": "people",
+    "filter": {"_id": {"$in": ["1", "3"]}},
+    "projection": {"address.street": 0, "address.zip": 0, "email": 0, "tags": 0}
+}

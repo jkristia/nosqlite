@@ -9,6 +9,7 @@
 //	nsq dump   demo.nsq [--coll users] [--from 309200144] [--limit 5]
 //	nsq verify demo.nsq
 //	nsq find   demo.nsq users '{"age":{"$gte":30}}' [--sort age:desc] [--limit 10]
+//	                                                [--projection '{"name":1}']
 //
 // This is a `package main`, which is what makes it an executable rather than a
 // library. `go build ./cmd/nsq` produces the binary.
@@ -74,6 +75,8 @@ dump flags:
 
 find flags:
   --sort <field:asc|desc>[,...]
+  --projection <json>  fields to return: '{"name":1,"address.city":1}' keeps
+                       only those (plus _id), '{"email":0}' keeps everything else
   --skip <n>
   --limit <n>      default 10; 0 means no limit
 `)
@@ -340,6 +343,7 @@ func cmdVerify(args []string) error {
 func cmdFind(args []string) error {
 	fs := flag.NewFlagSet("find", flag.ExitOnError)
 	sortSpec := fs.String("sort", "", "field:asc|desc, comma separated")
+	projectionSpec := fs.String("projection", "", `fields to return, e.g. '{"name":1}' or '{"email":0}'`)
 	skip := fs.Int("skip", 0, "documents to skip")
 	limit := fs.Int("limit", 10, "documents to return (0 = no limit)")
 	pos, flags := splitPositional(args, 3)
@@ -359,6 +363,12 @@ func cmdFind(args []string) error {
 	if filterJSON != "" {
 		if err := json.Unmarshal([]byte(filterJSON), &filter); err != nil {
 			return fmt.Errorf("parsing filter: %w", err)
+		}
+	}
+	var projection map[string]any
+	if *projectionSpec != "" {
+		if err := json.Unmarshal([]byte(*projectionSpec), &projection); err != nil {
+			return fmt.Errorf("parsing projection: %w", err)
 		}
 	}
 	keys, err := parseSort(*sortSpec)
@@ -382,7 +392,8 @@ func cmdFind(args []string) error {
 	// ForEach rather than Find, so a huge result set does not have to fit in
 	// memory before the first line is printed.
 	enc := json.NewEncoder(os.Stdout)
-	return c.ForEach(nosqlite.Query{Filter: filter, Sort: keys, Skip: *skip, Limit: *limit},
+	q := nosqlite.Query{Filter: filter, Projection: projection, Sort: keys, Skip: *skip, Limit: *limit}
+	return c.ForEach(q,
 		func(doc map[string]any) error {
 			return enc.Encode(doc)
 		})

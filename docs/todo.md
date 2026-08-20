@@ -36,6 +36,8 @@ explanation, not the facts.
       subjects, 845 lines, 26 headings; the terms table exists because the reader is
       expected to hold all three at once.
 
+      include projection here as well
+
 ---
 
 ## 1. Compaction
@@ -55,46 +57,7 @@ remapped across it.
 
 ---
 
-## 2. Projections
-
-§11 item 3: `Query.Project`, applied during the copy-out. Wanted as a feature —
-retrieve a subset of fields rather than whole documents — and it is also the
-cheapest win available on the binding-side cost that item 5 is about to measure.
-
-- [ ] `Query.Project` in the engine, applied at copy-out.
-- [ ] Carry it across the C ABI in `wireQuery`, and through both bindings.
-- [ ] Conformance cases.
-
-**Where the win actually lands.** Projection shrinks the C string, the
-`JSON.parse` / `json.loads` on the far side, and all three result copies. It does
-*not* avoid the full `json.Unmarshal` in Go — the engine still parses the whole
-document to pick fields out of it. That is partial parsing (§11 item 4), and the two
-compose: partial parsing alone only helps documents that *don't* match, since a
-match has to be returned whole. With a projection, `RequiredPaths()` becomes
-filter-fields ∪ projected-fields and a matching document never needs a full decode
-either. Projection first makes partial parsing worth far more.
-
-Settle before writing code:
-
-- [ ] **Inclusion or exclusion syntax.** Mongo's `{field: 1}` / `{field: 0}`, which
-      cannot be mixed in one projection — except `_id`, which is included by default
-      and must be excluded explicitly. Follow it, per the repo's "Mongo's query
-      language, Go's API shape" rule.
-- [ ] **Dotted paths** — `{"address.city": 1}` has to rebuild a partial subdocument,
-      not flatten the key.
-
-Array projection operators (`$slice`, positional `$`) are out of scope; note them as
-unsupported rather than half-implementing them.
-
-**The conformance harness already has the shape.** `expected.schema.json`'s `fields`
-key exists precisely because there is no projection — the runners take the full
-documents `Find()` returns and narrow them client-side. Once this lands, those cases
-can move to a real `project` in `query.json` and the client-side narrowing becomes
-the fallback for cases that deliberately check whole documents.
-
----
-
-## 3. npm packaging (local install)
+## 2. npm packaging (local install)
 
 Goal: `npm install` this into a real Node project from a local path, not the
 registry. Cheap, and it is the forcing function that shows what is actually missing
@@ -112,7 +75,7 @@ from the binding.
 
 ---
 
-## 4. Secondary indexes
+## 3. Secondary indexes
 
 §11 item 2: a planner walking the Matcher tree to turn `cmpNode` / `inNode` on an
 indexed field into a lookup, with the rest as a residual filter.
@@ -142,7 +105,7 @@ where an index definition is recorded.
 
 ---
 
-## 5. Scale tests — TypeScript and Python
+## 4. Scale tests — TypeScript and Python
 
 See [`testing.md`](testing.md) §5 for where these live.
 
@@ -175,7 +138,7 @@ No position in the order yet.
 
 - [ ] **Multi-process exclusion** — `flock` on the database file (§11 item 7).
       Nothing stops two processes opening one file today, which stops being
-      theoretical the moment this is installed into a real app (item 3).
+      theoretical the moment this is installed into a real app (item 2).
 - [ ] **Fuzz the replay path** — Go has native fuzzing and `Open` against truncated
       or corrupt files is a natural target. Cheap, and this is a storage engine.
 - [ ] **`Update(filter, {$set: ...})`** — the operator-style sibling of `Replace`.
@@ -185,9 +148,27 @@ No position in the order yet.
       document was replaced in memory. `DeleteMany` deliberately does not copy this,
       returning what actually landed; `Replace` should be brought into line.
 - [ ] **Partial parsing** — §11 item 4, the single biggest scan-speed win available.
-      Worth much more once projections (item 2) land: `RequiredPaths()` can then be
+      Worth more now that projections have landed: `RequiredPaths()` can be
       filter-fields ∪ projected-fields, so even a matching document never needs a
       full decode.
 - [ ] Quick-start examples in `README.md`, both binding module docstrings and
-      `examples/basic/*` still show only insert and find. Adding `Replace` and
-      `Delete` means doing all three languages, since they are kept parallel.
+      `examples/basic/*` still show only insert and find. Adding `Replace`,
+      `Delete` and a projection means doing all three languages, since they are
+      kept parallel.
+- [ ] **Lead reference sections with the lookup, not the argument.** These docs are
+      written to be *read* — claim, then justification — which makes them poor to
+      *consult*. Two questions in a row hit the same wall while projections were
+      landing: `{"age": 1}` sent a reader looking for what `1` means, and nothing
+      said why an exclusion projection exists at all. Both answers were in the
+      docs, several paragraphs deep, which is the same as not being there.
+
+      The rule for the pass: **the lookup first, the shapes second, the reasoning
+      last**, so prose is opt-in and a reader who needs one fact can stop after
+      one line. Projections in `README.md` and design §5 are done and are the
+      worked example of the shape to copy.
+
+      Candidates, in the order they are most likely to be consulted mid-task:
+      `matcher.md` §4 (compilation rules) and §6 (value semantics), the trace-file
+      section of `README.md`, and §0's document once it is split. Note this is the
+      same complaint §0 makes about one file, generalised — do §0 first and the
+      pattern for the rest falls out of it.

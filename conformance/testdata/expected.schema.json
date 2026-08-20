@@ -1,25 +1,28 @@
 {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "Conformance case expected result",
-    "description": "The _id list every binding's query.json must produce, in order.",
+    "description": "What every binding's query.json must produce: the _id list, the documents themselves, or both.",
     "type": "object",
-    "required": ["ids"],
+    "anyOf": [
+        { "required": ["ids"] },
+        { "required": ["docs"] }
+    ],
     "additionalProperties": false,
     "properties": {
         "$schema": { "type": "string" },
         "ids": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Document _id values, in the exact order Find() must return them."
+            "description": "Document _id values, in the exact order Find() must return them. Omit only when the query projects _id away and there are no ids to check — then `docs` carries the whole assertion."
         },
         "fields": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Optional. Document fields to check beyond _id/order, e.g. [\"_id\", \"age\", \"name\"]. nosqlite has no projection support, so this doesn't change the query — the runner takes the full documents Find() already returns and narrows each one down to these fields before comparing against `docs`. Present only to make expected.json readable; omit for id-order-only cases."
+            "description": "Optional. Document fields to check beyond _id/order, e.g. [\"_id\", \"age\", \"name\"]. The runner takes the documents Find() returned and narrows each one down to these fields before comparing against `docs`. That narrowing is client-side and flat — it predates projection support and stays for cases that deliberately query whole documents but only want a few fields spelled out in expected.json. A case testing projection sets `docs` WITHOUT `fields`, so the shape the engine produced is what gets compared."
         },
         "docs": {
             "type": "array",
-            "description": "Required if `fields` is set. One object per id in `ids`, same order, containing only the keys listed in `fields`.",
+            "description": "The documents Find() must return, in order. With `fields` set, each object holds only the keys listed there and is compared against the client-side narrowing. Without `fields`, each object is compared against the returned document in full — which is how a `projection` in query.json is checked.",
             "items": { "type": "object" }
         }
     }

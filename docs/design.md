@@ -3,7 +3,8 @@
 An embedded document store in Go, in the spirit of SQLite: no server, no daemon, one file
 on disk, linked directly into the host process.
 
-**Supported today: insert, query** (filter / sort / skip / limit)**, replace and delete.**
+**Supported today: insert, query** (filter / projection / sort / skip / limit)**, replace
+and delete.**
 Everything else is deferred — but each deferred feature has a named extension point
 below, so adding it is additive rather than a rewrite.
 
@@ -29,7 +30,7 @@ aren't yet familiar; this document assumes them.
 
 **Non-goals for v1** — deliberately, not accidentally:
 
-- Projections, aggregation. Replace and delete exist; the space a superseded record
+- Aggregation. Replace, delete and projections exist; the space a superseded record
   holds is not reclaimed, because compaction does not exist yet.
 - Secondary indexes (all queries are full scans; §5 says how indexes slot in). This is
   the price of the memory target: queries are I/O- and parse-bound until indexes land.
@@ -508,7 +509,7 @@ for each of this collection's records, in offset order (§4 picks the read shape
       json.Unmarshal into a scratch map        ← the only per-document allocation
       Matcher.Match
       no match → clear(scratch) and continue   ← document is dropped, never retained
-      match    → deep-copy into the result
+      match    → deep-copy into the result, narrowed by Query.Projection
 apply skip / limit
 ```
 
@@ -537,6 +538,30 @@ lifetime and locking rules.
 
 Results are **deep-copied** out of the scratch map. The copy is what makes reuse of the
 scratch map safe, and it also means a caller cannot corrupt anything by mutating a result.
+
+**Projection is that copy.** `Query.Projection` is a document whose keys are field paths
+and whose values are `1` to keep a field or `0` to drop it (`true`/`false` work too, and
+nothing else is accepted). One projection may do one or the other, never both —
+`{"name": 1, "address.city": 1}` keeps only those fields, `{"email": 0}` keeps everything
+else.
+
+**Why both forms.** Inclusion is the one to reach for, but it is a *closed* list against
+*open* documents: it can only return fields the caller knew about when the query was
+written, so a field added later silently stops coming back. Exclusion is the only way to
+say "the whole document, minus this" — dropping a credential or a large blob out of
+documents whose remaining shape is not knowable in advance — and that case is also where
+the performance win is largest, since the blob is what would have been copied into the C
+string and re-parsed on the far side (§8).
+
+The projection is applied *as* the deep copy rather than as a pass over it, so a narrower
+result is strictly less copying. It runs after `Filter` and the sort-key extraction, which
+is what lets a query filter or sort on a field it does not return. A dotted path rebuilds
+a partial subdocument (`{"address": {"city": …}}`) rather than flattening the key, so a
+projected document is still a document. What projection does *not* save is the
+`json.Unmarshal` that produced the document: the whole record is still parsed to pick
+fields out of it. Partial parsing (§11) is the other half, and the two compose — with a
+projection, `RequiredPaths()` becomes filter-fields ∪ projected-fields, so even a
+*matching* document never needs a full decode.
 
 **What this costs.** Every query parses every document: roughly 1–3 seconds for a full
 scan of a million 300-byte records, dominated by `encoding/json`. That is the honest
@@ -686,10 +711,11 @@ func (c *Collection) InsertMany(docs []map[string]any) (ids []string, err error)
 // --- reading ---
 
 type Query struct {
-    Filter map[string]any  // Mongo-dialect filter; nil or empty matches everything
-    Sort   []SortKey       // applied in order; empty means insertion order
-    Skip   int
-    Limit  int             // 0 means no limit
+    Filter  map[string]any // Mongo-dialect filter; nil or empty matches everything
+    Projection map[string]any // fields to return; nil or empty returns whole documents
+    Sort    []SortKey      // applied in order; empty means insertion order
+    Skip    int
+    Limit   int            // 0 means no limit
 }
 
 type SortKey struct {
@@ -751,7 +777,6 @@ foreclose them:
 func (c *Collection) Update(filter, update map[string]any) (int, error)   // later: $set, $inc
 func (db *DB) Compact() error                                            // rewrite live records
 func (c *Collection) EnsureIndex(field string) error                     // planner in §5
-// Query.Project map[string]any
 ```
 
 Already present:
@@ -820,6 +845,44 @@ func nsq_collections(h C.longlong) *C.char // → {"names":[...]} | {"error":"..
 //export nsq_free
 func nsq_free(s *C.char)
 ```
+
+**The two JSON arguments the listing leaves opaque.**
+
+`filterJSON` — taken by `nsq_count`, `nsq_replace`, `nsq_delete` and
+`nsq_delete_many` — is a bare Mongo-dialect filter document, the §5 grammar exactly as a
+caller writes it. NULL or `""` means the empty filter, which matches everything; on the
+two delete exports that is not a corner case but a collection-emptying operation, so the
+bindings require the argument rather than defaulting it (§7).
+
+`queryJSON` — taken by `nsq_find` — is the one argument that is neither a filter nor a
+document but a whole query. It mirrors `Query` (§7), with the sort keys spelled out as
+objects rather than pairs, which travels better into every language on the other side:
+
+```json
+{
+  "filter":     {"age": {"$gte": 30}},
+  "projection": {"name": 1, "address.city": 1},
+  "sort":       [{"field": "age", "desc": true}],
+  "skip":       0,
+  "limit":      10
+}
+```
+
+In `projection`, `1` keeps a field and `0` drops it (§5); in `sort`, `desc` defaults to
+false, i.e. ascending.
+
+Every key is optional. `{}`, or NULL, is the zero `Query` — everything, in insertion
+order — and `"limit": 0` means no limit, so a binding's own default limit (§9) has to be
+resolved into a number *before* the call, not signalled by omitting the key.
+
+`filter` and `projection` cross as the documents the caller wrote and are compiled on the
+Go side. That is deliberate and it is what the whole "JSON in, JSON out" convention buys:
+there is one grammar, one set of validation rules and one set of error messages for all
+three languages, instead of three re-implementations that drift. A binding's entire job
+here is to translate its own idiom into this shape — TypeScript's `[["age", -1]]` becomes
+`[{"field": "age", "desc": true}]` — and never to inspect or rewrite what is inside
+`filter` or `projection`. A new operator or a new projection rule therefore reaches
+Python and TypeScript with no binding change at all.
 
 Three rules make this boundary boring, which is what you want from an FFI boundary:
 
@@ -1036,11 +1099,15 @@ Ordered, each pointing at the extension point left for it:
 2. **Secondary indexes** — a planner walking the Matcher tree (§5) to turn `cmpNode` /
    `inNode` on an indexed field into a lookup, with the rest as a residual filter.
    Indexes rebuild from the log on open; nothing new on disk.
-3. **Projections** — `Query.Project`, applied during the copy-out in §5.
+3. ~~**Projections**~~ — done: `Query.Projection`, applied during the copy-out in §5, and
+   carried across the C ABI into both bindings. Array projection operators (`$slice`,
+   positional `$`) remain unsupported, and are rejected rather than ignored.
 4. **Partial parsing** — `Matcher.RequiredPaths()`, so the scan pulls only the fields the
    filter touches out of the raw JSON and skips the full `json.Unmarshal` for documents
    that don't match. The single biggest win available for scan speed (§5), and it needs
-   no format or API change. Pairs with a faster JSON path than `encoding/json`.
+   no format or API change. Pairs with a faster JSON path than `encoding/json`. Now that
+   projections have landed, the required set is filter-fields ∪ projected-fields, so a
+   matching document need not be fully decoded either.
 5. **Batched fetch across the C ABI** — `nsq_find_batch` so Python and TypeScript get
    `ForEach`-equivalent flat memory instead of one giant JSON string (§8, §9).
 6. **Handle refcounting in the C ABI** — so `nsq_close` can't free a database out from

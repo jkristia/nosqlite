@@ -225,6 +225,7 @@ class Collection:
         self,
         filter: dict[str, Any] | None = None,
         *,
+        projection: dict[str, Any] | None = None,
         sort: Sequence[tuple[str, int]] | None = None,
         skip: int = 0,
         limit: int | None = None,
@@ -233,6 +234,15 @@ class Collection:
 
         :param filter: a Mongo-dialect filter, e.g. ``{"age": {"$gte": 30}}``.
             ``None`` matches everything.
+        :param projection: which fields to return. ``{"name": 1,
+            "address.city": 1}`` keeps only those; ``{"email": 0}`` keeps
+            everything else. The two cannot be mixed in one projection --
+            except ``_id``, which comes back unless you ask for ``{"_id": 0}``.
+            A dotted key rebuilds the subdocument rather than flattening the
+            key, so ``{"address.city": 1}`` yields
+            ``{"address": {"city": "Oslo"}}``. ``None`` returns whole
+            documents. The projection applies on the way out, so *filter* and
+            *sort* may name fields it drops.
         :param sort: a list of ``(field, direction)`` pairs, where direction is
             ``1`` for ascending and ``-1`` for descending.
         :param skip: documents to drop before returning any.
@@ -245,6 +255,7 @@ class Collection:
 
         query = {
             "filter": filter or {},
+            "projection": projection or {},
             "sort": _encode_sort(sort),
             "skip": skip,
             "limit": effective,
@@ -260,15 +271,24 @@ class Collection:
             )
         return docs
 
-    def find_one(self, filter: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        """Return the first matching document, or ``None``."""
-        docs = self.find(filter, limit=1)
+    def find_one(
+        self,
+        filter: dict[str, Any] | None = None,
+        *,
+        projection: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the first matching document, or ``None``.
+
+        :param projection: which fields to return -- see :meth:`find`.
+        """
+        docs = self.find(filter, projection=projection, limit=1)
         return docs[0] if docs else None
 
     def iter_find(
         self,
         filter: dict[str, Any] | None = None,
         *,
+        projection: dict[str, Any] | None = None,
         sort: Sequence[tuple[str, int]] | None = None,
         skip: int = 0,
         batch: int = 1000,
@@ -285,7 +305,7 @@ class Collection:
             raise ValueError("batch must be positive")
         offset = skip
         while True:
-            page = self.find(filter, sort=sort, skip=offset, limit=batch)
+            page = self.find(filter, projection=projection, sort=sort, skip=offset, limit=batch)
             if not page:
                 return
             yield from page

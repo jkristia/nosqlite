@@ -10,7 +10,14 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { Collection, Database, type Document, type Filter, type SortKey } from "../../typescript/nosqlite/index.ts";
+import {
+  Collection,
+  Database,
+  type Document,
+  type Filter,
+  type Projection,
+  type SortKey,
+} from "../../typescript/nosqlite/index.ts";
 
 /** One sort key as written in query.json — see query.schema.json. */
 interface CaseSortKey {
@@ -45,21 +52,26 @@ interface CaseQuery {
   dataset: string;
   mutations?: CaseMutation[];
   filter?: Filter;
+  projection?: Projection;
   sort?: CaseSortKey[];
   skip?: number;
   limit?: number;
 }
 
 /**
- * A case's expected.json: the _id list every binding must produce, in order.
+ * A case's expected.json: what every binding must produce, in order.
  *
- * `fields`/`docs` are optional: nosqlite has no projection support, so they
- * don't change the query. They let a case narrow the full documents find()
- * already returns down to a few fields, purely so expected.json stays
- * readable instead of embedding whole documents.
+ * `docs` is compared in full when `fields` is absent, which is how a case with
+ * a `projection` in its query.json checks the shape the engine produced. With
+ * `fields` set, the runner instead narrows the documents find() returned down
+ * to those field names first — client-side and flat, purely so expected.json
+ * stays readable for cases that query whole documents.
+ *
+ * `ids` may be absent, and only then: a projection that drops `_id` leaves no
+ * ids to check.
  */
 interface CaseExpected {
-  ids: string[];
+  ids?: string[];
   fields?: string[];
   docs?: Record<string, unknown>[];
 }
@@ -68,7 +80,7 @@ interface CaseExpected {
 export interface CaseResult {
   got: string[];
   expected: string[];
-  /** Present only when the case's expected.json sets `fields`. */
+  /** Present only when the case's expected.json sets `docs`. */
   gotDocs?: Record<string, unknown>[];
   expectedDocs?: Record<string, unknown>[];
 }
@@ -113,6 +125,7 @@ export class CaseRunner {
       (query.mutations ?? []).forEach((m, i) => this.applyMutation(docs, i, m));
 
       const got = docs.find(query.filter ?? {}, {
+        projection: query.projection,
         sort: this.toSortKeys(query.sort),
         skip: query.skip ?? 0,
         // query.json's `limit` follows Query's convention (0/omitted = no
@@ -121,10 +134,21 @@ export class CaseRunner {
         limit: query.limit ?? 0,
       });
 
-      const result: CaseResult = { got: got.map((d) => d._id as string), expected: expected.ids };
+      // An absent `ids` means the query projected _id away, which is the only
+      // case allowed to omit it; `docs` then carries the assertion.
+      const result: CaseResult =
+        expected.ids === undefined
+          ? { got: [], expected: [] }
+          : { got: got.map((d) => d._id as string), expected: expected.ids };
+
       if (expected.fields && expected.fields.length > 0) {
         result.gotDocs = got.map((d) => this.projectFields(d, expected.fields!));
         result.expectedDocs = expected.docs ?? [];
+      } else if (expected.docs !== undefined) {
+        // No `fields` to narrow by, so the documents are compared whole — the
+        // engine's own projection is what produced their shape.
+        result.gotDocs = got as Record<string, unknown>[];
+        result.expectedDocs = expected.docs;
       }
       return result;
     } finally {

@@ -1,0 +1,7 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "An exclusion projection returns everything the document has except the named fields. Naming a field the document lacks -- doc 1 has no tags -- is not an error.",
+    "dataset": "people",
+    "filter": {"_id": {"$in": ["1", "3"]}},
+    "projection": {"address": 0, "email": 0, "tags": 0}
+}

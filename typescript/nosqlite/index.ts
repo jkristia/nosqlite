@@ -53,6 +53,16 @@ export type Filter = Json;
 export type SortKey = [field: string, direction: 1 | -1];
 
 /**
+ * Which fields to return: `{ name: 1, "address.city": 1 }` keeps only those,
+ * `{ email: 0 }` keeps everything else. The two cannot be mixed in one
+ * projection — except `_id`, which comes back unless you ask for `_id: 0`.
+ *
+ * A dotted key rebuilds the subdocument rather than flattening the key, so
+ * `{ "address.city": 1 }` yields `{ address: { city: "Oslo" } }`.
+ */
+export type Projection = Record<string, 0 | 1 | boolean>;
+
+/**
  * `find()` applies this limit when the caller gives none.
  *
  * Without it, one absent-minded `find({})` over a large collection
@@ -81,6 +91,11 @@ export interface DatabaseOptions {
 
 /** Options for {@link Collection.find}. */
 export interface FindOptions {
+  /**
+   * Which fields to return. Omitted returns whole documents. See
+   * {@link Projection}.
+   */
+  projection?: Projection;
   /** Sort keys, applied in order. */
   sort?: SortKey[];
   /** Documents to drop before returning any. */
@@ -92,8 +107,16 @@ export interface FindOptions {
   limit?: number;
 }
 
+/** Options for {@link Collection.findOne}. */
+export interface FindOneOptions {
+  /** Which fields to return. See {@link Projection}. */
+  projection?: Projection;
+}
+
 /** Options for {@link Collection.iterFind}. */
 export interface IterFindOptions {
+  /** Which fields to return. See {@link Projection}. */
+  projection?: Projection;
   sort?: SortKey[];
   skip?: number;
   /** How many documents to fetch per underlying call. */
@@ -270,6 +293,18 @@ export class Collection {
   /**
    * Return the documents matching `filter`. An omitted filter matches
    * everything.
+   *
+   * `options.projection` narrows what comes back — see {@link Projection}. It
+   * applies on the way out, so `filter` and `sort` may name fields the
+   * projection drops:
+   *
+   * ```ts
+   * users.find({ age: { $gte: 40 } }, {
+   *   projection: { name: 1, "address.city": 1, _id: 0 },
+   *   sort: [["age", -1]],
+   * });
+   * // [{ name: "Grace", address: { city: "New York" } }, ...]
+   * ```
    */
   find(filter: Filter = {}, options: FindOptions = {}): Document[] {
     const explicitLimit = options.limit !== undefined;
@@ -277,6 +312,7 @@ export class Collection {
 
     const docs = ffi.find(this.database.handle, this.name, {
       filter,
+      projection: options.projection ?? {},
       sort: encodeSort(options.sort),
       skip: options.skip ?? 0,
       limit,
@@ -293,8 +329,8 @@ export class Collection {
   }
 
   /** Return the first matching document, or `null`. */
-  findOne(filter: Filter = {}): Document | null {
-    const docs = this.find(filter, { limit: 1 });
+  findOne(filter: Filter = {}, options: FindOneOptions = {}): Document | null {
+    const docs = this.find(filter, { limit: 1, projection: options.projection });
     return docs[0] ?? null;
   }
 
@@ -316,7 +352,12 @@ export class Collection {
 
     let offset = options.skip ?? 0;
     for (;;) {
-      const page = this.find(filter, { sort: options.sort, skip: offset, limit: batch });
+      const page = this.find(filter, {
+        projection: options.projection,
+        sort: options.sort,
+        skip: offset,
+        limit: batch,
+      });
       if (page.length === 0) return;
       yield* page;
       if (page.length < batch) return;

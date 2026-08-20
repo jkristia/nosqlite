@@ -217,3 +217,45 @@ test("insert-duplicate-id-rejected", () => {
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
+
+test("projection-include-flat-fields", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("projection/include-flat-fields");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("projection-exclude-flat-fields", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("projection/exclude-flat-fields");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("projection-include-nested-path", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("projection/include-nested-path");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("projection-exclude-nested-path", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("projection/exclude-nested-path");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("projection-exclude-id", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("projection/exclude-id");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("projection-id-only", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("projection/id-only");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("projection-sort-on-excluded-field", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("projection/sort-on-excluded-field");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});

@@ -139,17 +139,26 @@ def run_case(name: str) -> CaseResult:
             # here too.
             got = docs.find(
                 query.get("filter") or {},
+                projection=query.get("projection") or None,
                 sort=_to_sort_tuples(query.get("sort")),
                 skip=query.get("skip", 0),
                 limit=query.get("limit", 0) or 0,
             )
 
+        # A missing ``ids`` means the query projected _id away, which is the
+        # only case allowed to omit it; ``docs`` then carries the assertion.
+        ids = expected.get("ids")
         result = CaseResult(
-            got=[d["_id"] for d in got],
-            expected=expected["ids"],
+            got=[d["_id"] for d in got] if ids is not None else [],
+            expected=ids if ids is not None else [],
         )
         fields = expected.get("fields")
         if fields:
             result.got_docs = [{f: d.get(f) for f in fields} for d in got]
             result.expected_docs = expected.get("docs") or []
+        elif expected.get("docs") is not None:
+            # No ``fields`` to narrow by, so the documents are compared whole --
+            # the engine's own projection is what produced their shape.
+            result.got_docs = got
+            result.expected_docs = expected["docs"]
         return result

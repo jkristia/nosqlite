@@ -8,8 +8,9 @@ Python and TypeScript.
 [`docs/getting-started.md`](docs/getting-started.md) is the step-by-step: what to
 install, in what order, and how to tell it worked.
 
-**v1 supports insert, query** (filter / sort / skip / limit)**, replace** — the
-whole-document overwrite — **and delete**; compaction is still to come. See
+**v1 supports insert, query** (filter / projection / sort / skip / limit)**,
+replace** — the whole-document overwrite — **and delete**; compaction is still to
+come. See
 [`docs/design.md`](docs/design.md) for the full design,
 [`docs/file-format.md`](docs/file-format.md) for what is on disk and how a
 collection scans its own records,
@@ -45,6 +46,14 @@ docs, _ := users.Find(nosqlite.Query{
     Limit:  10,
 })
 
+// Projection returns a subset of each document: {"name": 1} keeps only name
+// (and _id), {"email": 0} keeps everything but email. Dotted paths rebuild
+// the subdocument, so this yields {"name": ..., "address": {"city": ...}}.
+docs, _ = users.Find(nosqlite.Query{
+    Filter:     map[string]any{"age": map[string]any{"$gte": 30}},
+    Projection: map[string]any{"name": 1, "address.city": 1, "_id": 0},
+})
+
 // Constant memory over any number of matches:
 users.ForEach(nosqlite.Query{Filter: map[string]any{"age": map[string]any{"$gte": 30}}},
     func(doc map[string]any) error {
@@ -75,6 +84,9 @@ with Database("./demo.nsq", trace="all") as db:
 
     for u in users.find({"age": {"$gte": 40}}, sort=[("age", -1)], limit=10):
         print(u["name"], u["age"])
+
+    # projection: which fields come back — {"name": 1} keeps only name (and _id).
+    print(users.find({"age": {"$gte": 40}}, projection={"name": 1, "_id": 0}))
 
     print(users.find_one({"name": "Ada"}))    # dict, or None
     print(users.count({"age": {"$gte": 40}})) # 2
@@ -110,6 +122,9 @@ try {
   for (const u of users.find({ age: { $gte: 40 } }, { sort: [["age", -1]], limit: 10 })) {
     console.log(u.name, u.age);
   }
+
+  // projection: which fields come back — { name: 1 } keeps only name (and _id).
+  console.log(users.find({ age: { $gte: 40 } }, { projection: { name: 1, _id: 0 } }));
 
   console.log(users.findOne({ name: "Ada" }));      // object, or null
   console.log(users.count({ age: { $gte: 40 } }));  // 2
@@ -159,6 +174,49 @@ Two behaviours worth knowing:
 
 ---
 
+## Projections
+
+Which fields come back, in the same dialect and from all three languages.
+
+**A projection is a document: every key is a field path, every value is `1` or `0`.**
+
+| value | means |
+| --- | --- |
+| `1` — or `true` | **include** this field |
+| `0` — or `false` | **exclude** this field |
+| anything else | an error, including `{"$slice": 2}` and other operators |
+
+All the values in one projection must agree — see the first bullet below. Then
+the shapes you can write:
+
+| | |
+| --- | --- |
+| `{"name": 1, "age": 1}` | inclusion: only these fields, plus `_id` |
+| `{"email": 0, "tags": 0}` | exclusion: everything except these |
+| `{"name": 1, "_id": 0}` | `_id` is the one field exempt from the rule below |
+| `{"address.city": 1}` | dotted paths rebuild the subdocument: `{"address": {"city": …}}` |
+| `{"items.qty": 1}` | an array of subdocuments is projected element-wise |
+
+- **Reach for inclusion.** If you can name the fields you want, name them.
+  Exclusion exists for the one thing inclusion cannot express — *the whole
+  document, minus this* — which matters because an inclusion list is **closed**
+  and documents are **open**: `{"name": 1}` returns that field and nothing else
+  ever, so a field added to the documents next month silently stops coming back
+  from every query written before it existed. When you want everything except a
+  credential or a large blob (`{"password_hash": 0}`, `{"embedding": 0}`), the
+  inclusion form would mean listing every other field and re-editing that list
+  forever. Naming what you want → inclusion; naming what you can't afford to
+  carry → exclusion.
+- **Inclusion and exclusion cannot be mixed** in one projection — "keep name"
+  and "drop email" together leaves every other field's fate unstated. MongoDB
+  draws the line in the same place, `_id` included.
+- **The projection applies on the way out**, after the filter and the sort, so
+  a query may filter or sort on a field it does not return.
+- **Array projection operators — `$slice` and the positional `$` — are not
+  supported**, and are rejected rather than quietly ignored.
+
+---
+
 ## The trace file
 
 Off by default. Two ways to turn it on, and the second is the one you will
@@ -200,6 +258,7 @@ make cli
 ./bin/nsq dump   demo.nsq --from 309200144    # the off= from a trace line
 ./bin/nsq verify demo.nsq                     # walk every checksum
 ./bin/nsq find   demo.nsq users '{"age":{"$gte":30}}' --sort age:desc --limit 10
+./bin/nsq find   demo.nsq users --projection '{"name":1,"_id":0}'   # fields to return
 ```
 
 `verify` exits non-zero when it finds a bad record, so it works in a script.
@@ -224,7 +283,7 @@ guessing.
 
 ## What it does not do
 
-Field updates (`$set`), projections, aggregation, secondary indexes, transactions,
+Field updates (`$set`), aggregation, secondary indexes, transactions,
 multi-document atomicity, networking. **And no multi-process access**: there is
 no file lock, so two processes opening the same file will corrupt it. Each of
 these has a named extension point in the design doc; §11 there is the ordered

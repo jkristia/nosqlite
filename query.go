@@ -38,6 +38,30 @@ type Query struct {
 	//   }
 	Filter map[string]any
 
+	// Projection narrows the documents that come back. nil or empty returns
+	// them whole.
+	//
+	// Every key is a field path and every value says what to do with it:
+	//
+	//   1 (or true)   include this field
+	//   0 (or false)  exclude this field
+	//
+	// so a projection is either an inclusion or an exclusion, never both:
+	//
+	//   map[string]any{"name": 1, "address.city": 1}  // only these fields
+	//   map[string]any{"email": 0, "address.zip": 0}  // everything but these
+	//
+	// _id is the exception to that rule: it is included by default, so it may
+	// be excluded from an inclusion projection with {"_id": 0}. A dotted path
+	// rebuilds a partial subdocument rather than flattening the key:
+	// {"address.city": 1} yields {"address": {"city": ...}}. Array projection
+	// operators ($slice, the positional $) are not supported and are rejected
+	// rather than ignored.
+	//
+	// The projection applies at copy-out, after Filter and Sort, so both may
+	// name fields it drops.
+	Projection map[string]any
+
 	// Sort keys are applied in order. Empty means insertion order, which is
 	// also roughly creation order because generated _ids are time-prefixed.
 	Sort []SortKey
@@ -68,12 +92,25 @@ type SortKey = engine.SortKey
 // Also an alias, for the same reason as SortKey.
 type Matcher = engine.Matcher
 
+// Projection is also the compiled form of Query.Projection — the same word for
+// the same thing, once as the document you write and once as what the engine
+// runs. The nil *Projection means "the whole document".
+//
+// Also an alias.
+type Projection = engine.Projection
+
 // CompileFilter turns a filter document into a Matcher tree.
 //
 // It is exported because it is useful on its own — for validating a filter
 // before running it, and as the input an index planner would need.
 func CompileFilter(filter map[string]any) (Matcher, error) {
 	return engine.CompileFilter(filter)
+}
+
+// CompileProjection turns a projection document into a Projection, for the
+// same reason CompileFilter is exported: checking one without running a query.
+func CompileProjection(projection map[string]any) (*Projection, error) {
+	return engine.CompileProjection(projection)
 }
 
 // validate checks a Query's non-filter parts.
@@ -105,6 +142,9 @@ func (q Query) sortPaths() [][]string {
 func (q Query) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "filter=%s", compactJSON(q.Filter))
+	if len(q.Projection) > 0 {
+		fmt.Fprintf(&b, " projection=%s", compactJSON(q.Projection))
+	}
 	if len(q.Sort) > 0 {
 		b.WriteString(" sort=")
 		for i, k := range q.Sort {

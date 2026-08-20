@@ -1,0 +1,7 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "_id alone is an inclusion projection of nothing else -- the cheapest possible result, and the shape an id-only lookup wants.",
+    "dataset": "people",
+    "filter": {"_id": {"$in": ["1", "3"]}},
+    "projection": {"_id": 1}
+}

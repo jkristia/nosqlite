@@ -1,0 +1,7 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "An inclusion projection returns only the named fields, plus _id, which comes back without being asked for.",
+    "dataset": "people",
+    "filter": {"_id": {"$in": ["1", "3"]}},
+    "projection": {"name": 1, "age": 1}
+}

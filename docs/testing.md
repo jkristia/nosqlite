@@ -70,7 +70,7 @@ conformance/
             <dataset-name>.jsonl     # documents to insert, one per line — reused by many cases
         cases/
             <case-name>/
-                query.json           # {"dataset": ..., "mutations": [...], "filter": ..., "sort": ..., "skip": ..., "limit": ...}
+                query.json           # {"dataset": ..., "mutations": [...], "filter": ..., "projection": ..., "sort": ..., "skip": ..., "limit": ...}
                 expected.json        # the result every binding must produce for that query
 ```
 
@@ -126,6 +126,20 @@ no fixture.
 
 Cases that mutate live under `cases/mutate/<op>/`, keeping them findable as a group
 — they are the ones to look at first when a write path changes.
+
+**Two ways to assert on documents, and `projection` decides which.** `expected.json`
+always carries `ids`, the `_id` list `Find` must return in order. Beyond that:
+
+- With `fields`, the runner narrows the returned documents down to those field
+  names itself — client-side and flat — and compares that against `docs`. This
+  predates projections and stays for cases that query *whole* documents but only
+  want a few fields spelled out in the fixture.
+- Without `fields`, `docs` is compared against what came back **in full**. That is
+  the mode a case with a `projection` in its `query.json` uses, since the shape the
+  engine produced is the whole point of the case (`cases/projection/`).
+
+A projection that drops `_id` is the one situation where `expected.json` may omit
+`ids` — there are none to check, and `docs` carries the assertion alone.
 
 `query.json` and `expected.json` are hand-authored JSON with no compiler behind
 them, which makes "what am I allowed to put in here" a real question — `filter` in

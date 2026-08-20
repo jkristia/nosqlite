@@ -193,6 +193,15 @@ Three details worth knowing:
 
 `LookupOne` is the sorting counterpart — same walk, first value wins.
 
+**Projections walk paths, but not with this.** `Query.Projection` (`projection.go`) shares the
+dotted-path *grammar* and nothing else: matching asks "does any value down this path
+match", so it collects every value a path reaches, whereas projecting has to rebuild the
+document's shape around the values it keeps — one subdocument per segment, one narrowed
+element per array entry. Two consequences follow, and both are Mongo's behaviour as well:
+a projected `"items.qty"` yields `{"items": [{"qty": …}, …]}` rather than a flat list of
+qtys, and a numeric segment is *not* an array index there, because a rebuilt subdocument
+has no way to say "element 3 of an array whose other elements are gone".
+
 ---
 
 ## 6. Value semantics

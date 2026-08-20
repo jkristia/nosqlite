@@ -398,11 +398,18 @@ func decodeFilter(filterJSON *C.char) (map[string]any, error) {
 // wireQuery is the JSON shape of a query across the boundary. It mirrors
 // nosqlite.Query but spells the sort keys out as objects, which is friendlier
 // for every language on the other side.
+//
+// This shape is the bindings' contract, so it is written down for them in
+// docs/design.md §8 — keep the two in step.
 type wireQuery struct {
 	Filter map[string]any `json:"filter"`
-	Sort   []wireSortKey  `json:"sort"`
-	Skip   int            `json:"skip"`
-	Limit  int            `json:"limit"`
+	// Projection crosses as the document the caller wrote — {"name": 1} — and
+	// is compiled on this side, so every binding gets one grammar and one set
+	// of error messages rather than three re-implementations of the rules.
+	Projection map[string]any `json:"projection"`
+	Sort       []wireSortKey  `json:"sort"`
+	Skip       int            `json:"skip"`
+	Limit      int            `json:"limit"`
 }
 
 type wireSortKey struct {
@@ -415,7 +422,13 @@ func (w wireQuery) toQuery() nosqlite.Query {
 	for i, k := range w.Sort {
 		keys[i] = nosqlite.SortKey{Field: k.Field, Desc: k.Desc}
 	}
-	return nosqlite.Query{Filter: w.Filter, Sort: keys, Skip: w.Skip, Limit: w.Limit}
+	return nosqlite.Query{
+		Filter:     w.Filter,
+		Projection: w.Projection,
+		Sort:       keys,
+		Skip:       w.Skip,
+		Limit:      w.Limit,
+	}
 }
 
 //export nsq_find

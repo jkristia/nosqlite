@@ -12,7 +12,8 @@ package nosqlite
 //	    json.Unmarshal into a reused scratch map     <- only per-document alloc
 //	    Matcher.Match
 //	    no match -> clear the scratch map and move on, nothing retained
-//	    match    -> deep-copy the document into the result
+//	    match    -> deep-copy the document into the result, narrowed by
+//	                Query.Projection if there is one
 //	apply skip / limit
 //
 // A non-matching document costs one parse and leaves nothing behind.
@@ -166,14 +167,18 @@ func (c *Collection) runQuery(q Query, emit func(doc map[string]any) error) (sca
 	if err != nil {
 		return stats, err
 	}
+	proj, err := CompileProjection(q.Projection)
+	if err != nil {
+		return stats, err
+	}
 
 	started := time.Now()
 	snap := c.snapshot()
 
 	if len(q.Sort) == 0 {
-		err = c.runUnsorted(snap, matcher, q, &stats, emit)
+		err = c.runUnsorted(snap, matcher, proj, q, &stats, emit)
 	} else {
-		err = c.runSorted(snap, matcher, q, &stats, emit)
+		err = c.runSorted(snap, matcher, proj, q, &stats, emit)
 	}
 
 	c.db.traceFind(c.name, q, stats, time.Since(started), err)
@@ -183,8 +188,8 @@ func (c *Collection) runQuery(q Query, emit func(doc map[string]any) error) (sca
 // runUnsorted is the cheap shape: results come out in insertion order, so the
 // scan can stop the moment Skip+Limit documents have matched. Memory is
 // O(Limit), and so is the work when the limit is small and matches are common.
-func (c *Collection) runUnsorted(snap snapshot, m Matcher, q Query, stats *scanStats,
-	emit func(map[string]any) error) error {
+func (c *Collection) runUnsorted(snap snapshot, m Matcher, proj *Projection, q Query,
+	stats *scanStats, emit func(map[string]any) error) error {
 
 	scratch := make(map[string]any)
 
@@ -208,8 +213,10 @@ func (c *Collection) runUnsorted(snap snapshot, m Matcher, q Query, stats *scanS
 		}
 		stats.returned++
 		// Deep copy: the scratch map is about to be reused, and a caller must
-		// not be able to corrupt the engine by mutating a result.
-		if err := emit(deepCopyMap(scratch)); err != nil {
+		// not be able to corrupt the engine by mutating a result. Apply is that
+		// copy — with a projection it simply copies fewer fields, and with none
+		// (a nil *Projection) it copies the whole document.
+		if err := emit(proj.Apply(scratch)); err != nil {
 			return false, err
 		}
 		if q.Limit > 0 && stats.returned >= q.Limit {
@@ -227,8 +234,8 @@ func (c *Collection) runUnsorted(snap snapshot, m Matcher, q Query, stats *scanS
 //     ordered. This is the one query shape that can still exhaust memory. It is
 //     inherent to the operation rather than to this design — adding a Limit is
 //     the answer.
-func (c *Collection) runSorted(snap snapshot, m Matcher, q Query, stats *scanStats,
-	emit func(map[string]any) error) error {
+func (c *Collection) runSorted(snap snapshot, m Matcher, proj *Projection, q Query,
+	stats *scanStats, emit func(map[string]any) error) error {
 
 	paths := q.sortPaths()
 	scratch := make(map[string]any)
@@ -254,12 +261,14 @@ func (c *Collection) runSorted(snap snapshot, m Matcher, q Query, stats *scanSta
 		stats.matched++
 
 		// Extract sort keys from the scratch map before copying, so the keys
-		// are plain values and the comparison never walks paths again.
+		// are plain values and the comparison never walks paths again. They come
+		// from the WHOLE document, which is what lets a query sort on a field
+		// the projection drops.
 		keys := make([]any, len(paths))
 		for i, p := range paths {
 			keys[i] = deepCopy(engine.LookupOne(scratch, p))
 		}
-		entry := engine.SortEntry{Doc: deepCopyMap(scratch), Keys: keys, Seq: stats.matched}
+		entry := engine.SortEntry{Doc: proj.Apply(scratch), Keys: keys, Seq: stats.matched}
 
 		if bounded {
 			heapK.Add(entry)

@@ -1,0 +1,7 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "_id is the one field exempt from the no-mixing rule: it may be excluded from an otherwise-inclusion projection. Nothing then identifies the documents, so expected.json has no ids to check and the documents themselves carry the assertion.",
+    "dataset": "people",
+    "filter": {"_id": {"$in": ["1", "3"]}},
+    "projection": {"name": 1, "_id": 0}
+}

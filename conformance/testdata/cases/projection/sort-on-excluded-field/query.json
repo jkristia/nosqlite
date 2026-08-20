@@ -1,0 +1,8 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "The projection applies on the way out, after the filter and the sort have run, so both may name fields it drops -- here the results are ordered by an age that does not come back.",
+    "dataset": "people",
+    "filter": {"_id": {"$in": ["1", "3", "5"]}},
+    "projection": {"name": 1, "_id": 0},
+    "sort": [{"field": "age", "desc": true}]
+}
