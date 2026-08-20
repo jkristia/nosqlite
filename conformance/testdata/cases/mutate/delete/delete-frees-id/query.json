@@ -1,0 +1,19 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "Deleting frees the _id: re-inserting under it afterwards is an insert, not a collision. And unlike a replace, which keeps the document's place, the re-inserted document goes to the END of insertion order — it is a new document that happens to reuse a name. See replace-delete-and-compaction.md §6.5. The query skips to the tail to show where it landed.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "delete",
+            "filter": {"_id": "3"},
+            "matched": 1
+        },
+        {
+            "op": "insert",
+            "document": {"_id": "3", "name": "Maya Patel II", "age": 99},
+            "matched": 1
+        }
+    ],
+    "filter": {},
+    "skip": 50
+}

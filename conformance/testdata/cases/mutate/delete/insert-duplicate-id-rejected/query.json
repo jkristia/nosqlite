@@ -1,0 +1,14 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "The control for delete-frees-id: the very same insert, without the delete in front of it, is rejected. That is what makes the other case mean something — the re-insert succeeds because the tombstone took the _id's table entry with it, not because duplicate ids are allowed. The query then shows the rejected write wrote nothing.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "insert",
+            "document": {"_id": "3", "name": "Maya Patel II", "age": 99},
+            "error": "duplicate _id"
+        }
+    ],
+    "filter": {"_id": "3"},
+    "limit": 1
+}

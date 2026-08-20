@@ -61,6 +61,25 @@ def _to_sort_tuples(sort: list[dict[str, Any]] | None) -> list[tuple[str, int]]:
     return [(s["field"], -1 if s.get("desc") else 1) for s in (sort or [])]
 
 
+def _perform_mutation(docs: Any, op: str, mutation: dict[str, Any]) -> int:
+    """Performs the write itself and returns the count it produced.
+
+    Kept separate so ``_apply_mutation``'s ``try`` wraps nothing but the call --
+    an op this runner does not implement is rejected before we get here.
+    """
+    if op == "insert":
+        # insert() returns an id rather than a count; a successful one wrote
+        # exactly one document, so report 1 and let ``matched`` mean the same
+        # thing it means for every other op.
+        docs.insert(mutation["document"])
+        return 1
+    if op == "replace":
+        return docs.replace(mutation.get("filter") or {}, mutation["document"])
+    if op == "delete":
+        return docs.delete(mutation.get("filter") or {})
+    return docs.delete_many(mutation.get("filter") or {})
+
+
 def _apply_mutation(docs: Any, i: int, mutation: dict[str, Any]) -> None:
     """Performs one of a case's mutations.
 
@@ -70,12 +89,12 @@ def _apply_mutation(docs: Any, i: int, mutation: dict[str, Any]) -> None:
     ``error`` assertion expects.
     """
     op = mutation["op"]
-    if op != "replace":
+    if op not in ("insert", "replace", "delete", "delete_many"):
         raise AssertionError(f"mutations[{i}]: unknown op {op!r}")
 
     want_error = mutation.get("error")
     try:
-        matched = docs.replace(mutation.get("filter") or {}, mutation["document"])
+        matched = _perform_mutation(docs, op, mutation)
     except NoSQLiteError as exc:
         if not want_error:
             raise

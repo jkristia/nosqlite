@@ -224,6 +224,47 @@ export class Collection {
     return ffi.replace(this.database.handle, this.name, filter, document);
   }
 
+  /**
+   * Remove the first document matching `filter`, and return how many were
+   * deleted — `1`, or `0` when nothing matched.
+   *
+   * "First" means insertion order, the same order {@link findOne} uses.
+   * Removing more than one at a time is {@link deleteMany}, and the split is
+   * deliberate: a filter that matches more than you meant is the one mistake in
+   * this API with no undo, so the wider operation is the one you have to type
+   * more to get.
+   *
+   * The `filter` is required rather than defaulting to `{}` for the same
+   * reason — unlike {@link count} and {@link find}, an omitted filter here
+   * would empty the collection.
+   *
+   * A delete makes the file **bigger**, not smaller: it appends a tombstone and
+   * leaves the document where it was. Both are reclaimed only by a compaction.
+   *
+   * Deleting frees the `_id`: inserting a new document under it afterwards is
+   * allowed and does not collide.
+   */
+  delete(filter: Filter): number {
+    return ffi.deleteOne(this.database.handle, this.name, filter);
+  }
+
+  /**
+   * Remove every document matching `filter`, and return how many were deleted.
+   *
+   * An empty filter matches everything and empties the collection. There is no
+   * confirmation step and no undo.
+   *
+   * Not atomic: the tombstones are written together, but a crash can leave a
+   * prefix of them on disk, so some documents are deleted and the rest survive.
+   * When that happens this throws, and the count that actually landed is lost
+   * to the caller — the C boundary reports it, but an exception carries no
+   * return value. Delete in smaller batches if you need to know exactly how far
+   * it got.
+   */
+  deleteMany(filter: Filter): number {
+    return ffi.deleteMany(this.database.handle, this.name, filter);
+  }
+
   // -- reading --------------------------------------------------------------
 
   /**

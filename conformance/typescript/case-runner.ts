@@ -24,9 +24,10 @@ interface CaseSortKey {
  * write did.
  */
 interface CaseMutation {
-  op: "replace";
+  op: "insert" | "replace" | "delete" | "delete_many";
   filter?: Filter;
-  document: Document;
+  /** Required by `insert` and `replace`, unused by the deletes. */
+  document?: Document;
   /** The count the operation must return. Absent means "don't check". */
   matched?: number;
   /**
@@ -140,11 +141,13 @@ export class CaseRunner {
    * expects.
    */
   private applyMutation(docs: Collection, i: number, m: CaseMutation): void {
-    if (m.op !== "replace") throw new Error(`mutations[${i}]: unknown op ${String(m.op)}`);
+    if (!["insert", "replace", "delete", "delete_many"].includes(m.op)) {
+      throw new Error(`mutations[${i}]: unknown op ${String(m.op)}`);
+    }
 
     let matched: number;
     try {
-      matched = docs.replace(m.filter ?? {}, m.document);
+      matched = this.performMutation(docs, m);
     } catch (e) {
       if (!m.error) throw e;
       const message = (e as Error).message;
@@ -165,6 +168,28 @@ export class CaseRunner {
       throw new Error(
         `mutations[${i}] (${m.op}) matched ${matched} documents, want ${m.matched}`,
       );
+    }
+  }
+
+  /**
+   * Performs the write itself and returns the count it produced, so
+   * applyMutation's try/catch wraps nothing but the call — an op this runner
+   * does not implement is rejected before we get here.
+   */
+  private performMutation(docs: Collection, m: CaseMutation): number {
+    switch (m.op) {
+      case "insert":
+        // insert() returns an id rather than a count; a successful one wrote
+        // exactly one document, so report 1 and let `matched` mean the same
+        // thing it means for every other op.
+        docs.insert(m.document!);
+        return 1;
+      case "replace":
+        return docs.replace(m.filter ?? {}, m.document!);
+      case "delete":
+        return docs.delete(m.filter ?? {});
+      default:
+        return docs.deleteMany(m.filter ?? {});
     }
   }
 

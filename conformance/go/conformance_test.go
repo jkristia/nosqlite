@@ -40,6 +40,8 @@ type caseQuery struct {
 // the query, which is how a case covers write behaviour: the query afterwards
 // observes what the write did.
 type caseMutation struct {
+	// Op is one of insert, replace, delete, delete_many — see
+	// ../testdata/query.schema.json.
 	Op       string         `json:"op"`
 	Filter   map[string]any `json:"filter"`
 	Document map[string]any `json:"document"`
@@ -168,10 +170,32 @@ func applyMutation(t *testing.T, coll *nosqlite.Collection, i int, m caseMutatio
 
 	// Checked before the call, not in a default: arm below, so that an op no
 	// runner implements cannot be mistaken for the failure m.Error expects.
-	if m.Op != "replace" {
+	switch m.Op {
+	case "insert", "replace", "delete", "delete_many":
+	default:
 		t.Fatalf("mutations[%d]: unknown op %q", i, m.Op)
 	}
-	n, err := coll.Replace(m.Filter, m.Document)
+
+	var (
+		n   int
+		err error
+	)
+	switch m.Op {
+	case "insert":
+		// Insert returns an id rather than a count; a successful one wrote
+		// exactly one document, so report 1 and let `matched` mean the same
+		// thing it means for every other op.
+		_, err = coll.Insert(m.Document)
+		if err == nil {
+			n = 1
+		}
+	case "replace":
+		n, err = coll.Replace(m.Filter, m.Document)
+	case "delete":
+		n, err = coll.Delete(m.Filter)
+	case "delete_many":
+		n, err = coll.DeleteMany(m.Filter)
+	}
 
 	if m.Error != "" {
 		if err == nil {

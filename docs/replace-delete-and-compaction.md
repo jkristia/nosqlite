@@ -771,7 +771,7 @@ Steps 4 and 5 were not separable in the same way — until replay could apply an
 record, a database `Replace` had been called on could not be reopened at all.
 
 Each Go step implies a follow-on commit carrying the same operation across the C ABI and
-both bindings, with conformance cases; that is how step 4 landed and how step 6 lands.
+both bindings, with conformance cases; that is how steps 4 and 6 both landed.
 
 ---
 

@@ -1,0 +1,13 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "`delete_many` removes every match, not just the first. The five music-tagged documents go; the query asks for the art-tagged ones, which overlap them, so the result shows both that all five are gone and that the survivors kept insertion order.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "delete_many",
+            "filter": {"tags": "music"},
+            "matched": 5
+        }
+    ],
+    "filter": {"tags": "art"}
+}

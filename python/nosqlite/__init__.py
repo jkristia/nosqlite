@@ -180,6 +180,45 @@ class Collection:
         """
         return _lib.replace(self.database.handle, self.name, filter, document)
 
+    def delete(self, filter: dict[str, Any]) -> int:
+        """Remove the first document matching *filter*, and return how many were
+        deleted -- ``1``, or ``0`` when nothing matched.
+
+        "First" means insertion order, the same order :meth:`find_one` uses.
+        Removing more than one at a time is :meth:`delete_many`, and the split
+        is deliberate: a filter that matches more than you meant is the one
+        mistake in this API with no undo, so the wider operation is the one you
+        have to type more to get.
+
+        *filter* is required rather than defaulting to "everything" for the same
+        reason -- unlike :meth:`count` and :meth:`find`, an omitted filter here
+        would empty the collection.
+
+        A delete makes the file **bigger**, not smaller: it appends a tombstone
+        and leaves the document where it was. Both are reclaimed only by a
+        compaction.
+
+        Deleting frees the ``_id``: inserting a new document under it afterwards
+        is allowed and does not collide.
+        """
+        return _lib.delete(self.database.handle, self.name, filter)
+
+    def delete_many(self, filter: dict[str, Any]) -> int:
+        """Remove every document matching *filter*, and return how many were
+        deleted.
+
+        An empty filter matches everything and empties the collection. There is
+        no confirmation step and no undo.
+
+        Not atomic: the tombstones are written together, but a crash can leave a
+        prefix of them on disk, so some documents are deleted and the rest
+        survive. When that happens this raises :class:`NoSQLiteError`, and the
+        count that actually landed is lost to the caller -- the C boundary
+        reports it, but an exception carries no return value. Delete in smaller
+        batches if you need to know exactly how far it got.
+        """
+        return _lib.delete_many(self.database.handle, self.name, filter)
+
     # -- reading ------------------------------------------------------------
 
     def find(

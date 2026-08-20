@@ -1,0 +1,13 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "`delete` caps at one document however many the filter matches. Five documents are tagged music; exactly the first in insertion order goes, and the other four are untouched and still in order.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "delete",
+            "filter": {"tags": "music"},
+            "matched": 1
+        }
+    ],
+    "filter": {"tags": "music"}
+}

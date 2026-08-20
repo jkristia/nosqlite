@@ -38,46 +38,7 @@ explanation, not the facts.
 
 ---
 
-## 1. Delete — bindings and conformance
-
-The Go engine is done: `Delete`/`DeleteMany`, and replay of the `op=2` records they
-write. What is left is carrying it across the boundary, which is how `Replace`
-landed too — the engine in one commit, the bindings and the shared corpus in the
-next.
-
-- [ ] `nsq_delete` / `nsq_delete_many` in `capi/capi.go`, replying `{"deleted": n}`.
-      Follow `nsq_count`'s shape, which already takes exactly `(handle, coll,
-      filterJSON)`. `nsq_delete_many` should report its count alongside the error on
-      a partial batch, as `nsq_insert_many` does — `DeleteMany` returns how many
-      tombstones actually landed, and that number is the one to trust when the call
-      failed.
-- [ ] TypeScript: `ffi.ts` declarations and wrappers, then `delete` / `deleteMany`
-      on `Collection`. `delete` is a reserved word as a bare identifier but legal as
-      a method name — it does not need renaming to `remove`.
-- [ ] Python: `_lib.py` argtypes and wrappers, then `delete` / `delete_many`.
-- [ ] Conformance cases in `testdata/cases/mutate/delete/`.
-
-**Conformance is already ready for it.** The op names are settled: `"delete"` and
-`"delete_many"`, added to `query.schema.json`'s `op` enum, with one arm in each of
-the three runners' `applyMutation`. Sequencing, `matched` and `error` all work
-unchanged; `document` is already optional in the schema, so a delete mutation
-validates as soon as the enum admits it. Two things to get right, both learned from
-replace:
-
-- a case shaped as a no-op needs its `matched` or `error` to carry the assertion —
-  the query alone cannot fail
-- assert insertion **order** afterwards, not just membership, since that is precisely
-  the property delete does not preserve
-
-**Worth adding while in there:** an `"insert"` op. §6.5 of
-[`replace-delete-and-compaction.md`](replace-delete-and-compaction.md) — delete, then
-re-insert the same `_id` — is the sharpest delete behaviour there is, and it cannot be expressed in
-the corpus today because a case can only insert through its dataset. It is about
-three lines per runner.
-
----
-
-## 2. Compaction
+## 1. Compaction
 
 Step 8. Not optional now that delete has landed: `nsq stat` already prints "consider
 `nsq compact <path>`" for a verb that does not exist yet, and a delete makes the file
@@ -94,11 +55,11 @@ remapped across it.
 
 ---
 
-## 3. Projections
+## 2. Projections
 
 §11 item 3: `Query.Project`, applied during the copy-out. Wanted as a feature —
 retrieve a subset of fields rather than whole documents — and it is also the
-cheapest win available on the binding-side cost that item 6 is about to measure.
+cheapest win available on the binding-side cost that item 5 is about to measure.
 
 - [ ] `Query.Project` in the engine, applied at copy-out.
 - [ ] Carry it across the C ABI in `wireQuery`, and through both bindings.
@@ -133,7 +94,7 @@ the fallback for cases that deliberately check whole documents.
 
 ---
 
-## 4. npm packaging (local install)
+## 3. npm packaging (local install)
 
 Goal: `npm install` this into a real Node project from a local path, not the
 registry. Cheap, and it is the forcing function that shows what is actually missing
@@ -151,7 +112,7 @@ from the binding.
 
 ---
 
-## 5. Secondary indexes
+## 4. Secondary indexes
 
 §11 item 2: a planner walking the Matcher tree to turn `cmpNode` / `inNode` on an
 indexed field into a lookup, with the rest as a residual filter.
@@ -181,7 +142,7 @@ where an index definition is recorded.
 
 ---
 
-## 6. Scale tests — TypeScript and Python
+## 5. Scale tests — TypeScript and Python
 
 See [`testing.md`](testing.md) §5 for where these live.
 
@@ -214,7 +175,7 @@ No position in the order yet.
 
 - [ ] **Multi-process exclusion** — `flock` on the database file (§11 item 7).
       Nothing stops two processes opening one file today, which stops being
-      theoretical the moment this is installed into a real app (item 4).
+      theoretical the moment this is installed into a real app (item 3).
 - [ ] **Fuzz the replay path** — Go has native fuzzing and `Open` against truncated
       or corrupt files is a natural target. Cheap, and this is a storage engine.
 - [ ] **`Update(filter, {$set: ...})`** — the operator-style sibling of `Replace`.
@@ -224,7 +185,7 @@ No position in the order yet.
       document was replaced in memory. `DeleteMany` deliberately does not copy this,
       returning what actually landed; `Replace` should be brought into line.
 - [ ] **Partial parsing** — §11 item 4, the single biggest scan-speed win available.
-      Worth much more once projections (item 3) land: `RequiredPaths()` can then be
+      Worth much more once projections (item 2) land: `RequiredPaths()` can then be
       filter-fields ∪ projected-fields, so even a matching document never needs a
       full decode.
 - [ ] Quick-start examples in `README.md`, both binding module docstrings and

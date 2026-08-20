@@ -3,7 +3,7 @@
 An embedded document store in Go, in the spirit of SQLite: no server, no daemon, one file
 on disk, linked directly into the host process.
 
-**Supported today: insert, query** (filter / sort / skip / limit) **and replace.**
+**Supported today: insert, query** (filter / sort / skip / limit)**, replace and delete.**
 Everything else is deferred — but each deferred feature has a named extension point
 below, so adding it is additive rather than a rewrite.
 
@@ -799,6 +799,15 @@ func nsq_insert_many(h C.longlong, coll, docsJSON *C.char) *C.char
 //export nsq_replace
 func nsq_replace(h C.longlong, coll, filterJSON, docJSON *C.char) *C.char
                                           // → {"replaced":1} | {"error":"..."}
+//export nsq_delete
+func nsq_delete(h C.longlong, coll, filterJSON *C.char) *C.char
+                                          // → {"deleted":1} | {"error":"..."}
+//export nsq_delete_many
+func nsq_delete_many(h C.longlong, coll, filterJSON *C.char) *C.char
+                                          // → {"deleted":n} | {"error":"...","deleted":n}
+                                          // the count is reported alongside the
+                                          // error: DeleteMany is not atomic, so
+                                          // n is how many tombstones landed
 //export nsq_find
 func nsq_find(h C.longlong, coll, queryJSON *C.char) *C.char
                                           // → {"docs":[...]} | {"error":"..."}
@@ -909,6 +918,10 @@ hasn't — `Database` opens, `db["name"]` gets a collection, the context manager
 - `Collection.replace(filter, document)` → `nsq_replace`, returning the number replaced
   (`0` or `1`). A rejected `_id` change surfaces as `NoSQLiteError`, like any other
   error the boundary reports.
+- `Collection.delete(filter)` / `delete_many(filter)` → `nsq_delete` / `nsq_delete_many`,
+  returning the number deleted. The filter is a **required** argument in both bindings,
+  unlike `count` and `find` where an omitted filter means "everything": delete has no
+  undo, so `users.delete_many()` must not be the easiest thing to type.
 - `Database(path, sync="always", trace=None)` passes `{"sync": ..., "trace": ...}` as
   `nsq_open`'s options argument, reaching `WithSync` and `WithTrace` from §7. The
   `NOSQLITE_TRACE` environment variable works from Python too, since it is read on the

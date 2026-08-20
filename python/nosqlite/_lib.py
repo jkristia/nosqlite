@@ -14,6 +14,10 @@ Two details matter here and nowhere else:
 2. Every call goes through ``_call``, whose ``try/finally`` frees the returned
    string even if JSON decoding raises. That is the whole memory-safety story:
    no caller can forget.
+
+``nsq_insert_many`` and ``nsq_delete_many`` can report an error *and* how far
+the batch got. ``_call`` raises on the error and drops that partial count --
+see ``Collection.insert_many`` and ``Collection.delete_many``.
 """
 
 from __future__ import annotations
@@ -91,6 +95,12 @@ _lib.nsq_insert_many.restype = _c_ptr
 
 _lib.nsq_replace.argtypes = [_c_ll, _c_str, _c_str, _c_str]
 _lib.nsq_replace.restype = _c_ptr
+
+_lib.nsq_delete.argtypes = [_c_ll, _c_str, _c_str]
+_lib.nsq_delete.restype = _c_ptr
+
+_lib.nsq_delete_many.argtypes = [_c_ll, _c_str, _c_str]
+_lib.nsq_delete_many.restype = _c_ptr
 
 _lib.nsq_find.argtypes = [_c_ll, _c_str, _c_str]
 _lib.nsq_find.restype = _c_ptr
@@ -174,6 +184,20 @@ def replace(
         _utf8(json.dumps(document)),
     )
     return int(reply["replaced"])
+
+
+def delete(handle: int, collection: str, filter: dict[str, Any]) -> int:
+    reply = _call(
+        _lib.nsq_delete, _c_ll(handle), _utf8(collection), _utf8(json.dumps(filter))
+    )
+    return int(reply["deleted"])
+
+
+def delete_many(handle: int, collection: str, filter: dict[str, Any]) -> int:
+    reply = _call(
+        _lib.nsq_delete_many, _c_ll(handle), _utf8(collection), _utf8(json.dumps(filter))
+    )
+    return int(reply["deleted"])
 
 
 def find(handle: int, collection: str, query: dict[str, Any]) -> list[dict[str, Any]]:

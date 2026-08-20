@@ -306,11 +306,9 @@ func nsq_replace(id C.longlong, coll *C.char, filterJSON *C.char, docJSON *C.cha
 	// Two JSON arguments rather than one bundled object, mirroring the Go
 	// signature Replace(filter, doc). nsq_find bundles because a query has four
 	// parts that keep growing; a replace has exactly these two.
-	var filter map[string]any
-	if raw := goStr(filterJSON); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &filter); err != nil {
-			return respondError(fmt.Errorf("nosqlite: bad filter JSON: %w", err))
-		}
+	filter, err := decodeFilter(filterJSON)
+	if err != nil {
+		return respondError(err)
 	}
 	var doc map[string]any
 	if err := json.Unmarshal([]byte(goStr(docJSON)), &doc); err != nil {
@@ -326,6 +324,75 @@ func nsq_replace(id C.longlong, coll *C.char, filterJSON *C.char, docJSON *C.cha
 		return respondError(err)
 	}
 	return respond(map[string]any{"replaced": n})
+}
+
+//export nsq_delete
+func nsq_delete(id C.longlong, coll *C.char, filterJSON *C.char) (out *C.char) {
+	defer guard(&out)
+
+	h, err := acquire(int64(id))
+	if err != nil {
+		return respondError(err)
+	}
+	defer release(h)
+
+	filter, err := decodeFilter(filterJSON)
+	if err != nil {
+		return respondError(err)
+	}
+	c, err := h.db.Collection(goStr(coll))
+	if err != nil {
+		return respondError(err)
+	}
+	n, err := c.Delete(filter)
+	if err != nil {
+		return respondError(err)
+	}
+	return respond(map[string]any{"deleted": n})
+}
+
+//export nsq_delete_many
+func nsq_delete_many(id C.longlong, coll *C.char, filterJSON *C.char) (out *C.char) {
+	defer guard(&out)
+
+	h, err := acquire(int64(id))
+	if err != nil {
+		return respondError(err)
+	}
+	defer release(h)
+
+	filter, err := decodeFilter(filterJSON)
+	if err != nil {
+		return respondError(err)
+	}
+	c, err := h.db.Collection(goStr(coll))
+	if err != nil {
+		return respondError(err)
+	}
+	n, err := c.DeleteMany(filter)
+	if err != nil {
+		// Report the count that did land alongside the error, as nsq_insert_many
+		// reports its ids. DeleteMany is not atomic: a crash mid-batch leaves a
+		// prefix of the tombstones on disk, and n is how many actually landed —
+		// the number to trust when the call failed.
+		return respond(map[string]any{"error": err.Error(), "deleted": n})
+	}
+	return respond(map[string]any{"deleted": n})
+}
+
+// decodeFilter parses an optional filter argument. An empty or NULL string is a
+// nil filter, which matches everything — the same convention nsq_count and
+// nsq_replace already use.
+func decodeFilter(filterJSON *C.char) (map[string]any, error) {
+	raw := goStr(filterJSON)
+	if raw == "" {
+		return nil, nil
+	}
+	var filter map[string]any
+	if err := json.Unmarshal([]byte(raw), &filter); err != nil {
+		return nil, fmt.Errorf("nosqlite: bad filter JSON: %w", err)
+	}
+	return filter, nil
 }
 
 // wireQuery is the JSON shape of a query across the boundary. It mirrors
@@ -397,11 +464,9 @@ func nsq_count(id C.longlong, coll *C.char, filterJSON *C.char) (out *C.char) {
 	}
 	defer release(h)
 
-	var filter map[string]any
-	if raw := goStr(filterJSON); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &filter); err != nil {
-			return respondError(fmt.Errorf("nosqlite: bad filter JSON: %w", err))
-		}
+	filter, err := decodeFilter(filterJSON)
+	if err != nil {
+		return respondError(err)
 	}
 	c, err := h.db.Collection(goStr(coll))
 	if err != nil {

@@ -25,21 +25,21 @@
                 "not": { "required": ["matched", "error"] },
                 "properties": {
                     "op": {
-                        "enum": ["replace"],
-                        "description": "Which write to perform. `replace` overwrites the first document matching `filter` with `document` in full."
+                        "enum": ["insert", "replace", "delete", "delete_many"],
+                        "description": "Which write to perform. `insert` adds `document`. `replace` overwrites the first document matching `filter` with `document` in full. `delete` removes the first document matching `filter`; `delete_many` removes every match."
                     },
                     "filter": {
                         "type": "object",
-                        "description": "Which document to write to. Same Mongo-dialect grammar as the query `filter` below."
+                        "description": "Which document(s) to write to, for `replace`, `delete` and `delete_many`. Same Mongo-dialect grammar as the query `filter` below. Unused by `insert`. An empty filter on `delete_many` empties the collection."
                     },
                     "document": {
                         "type": "object",
-                        "description": "For `replace`: the complete replacement document, not a diff — omitted fields are gone afterwards. `_id` is immutable, so include it only if it equals the matched document's."
+                        "description": "Required for `insert` and `replace`, unused by the deletes. For `replace` it is the complete replacement document, not a diff — omitted fields are gone afterwards, and `_id` is immutable so include it only if it equals the matched document's. For `insert`, a supplied `_id` must be free: re-using a live one is an error, but an `_id` freed by an earlier `delete` is not."
                     },
                     "matched": {
                         "type": "integer",
                         "minimum": 0,
-                        "description": "Optional assertion: the count the operation must return (for `replace`, 0 or 1). The runner checks it before running the query, so a case that mutates nothing fails here rather than confusingly further down. Mutually exclusive with `error` — a failed operation returns no count."
+                        "description": "Optional assertion: the count the operation must return — 0 or 1 for `replace` and `delete`, any count for `delete_many`, and 1 for a successful `insert`. The runner checks it before running the query, so a case that mutates nothing fails here rather than confusingly further down. Mutually exclusive with `error` — a failed operation returns no count."
                     },
                     "error": {
                         "type": "string",

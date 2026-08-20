@@ -98,6 +98,8 @@ const nsqClose = lib.func("void *nsq_close(int64_t handle)");
 const nsqInsert = lib.func("void *nsq_insert(int64_t handle, const char *coll, const char *doc)");
 const nsqInsertMany = lib.func("void *nsq_insert_many(int64_t handle, const char *coll, const char *docs)");
 const nsqReplace = lib.func("void *nsq_replace(int64_t handle, const char *coll, const char *filter, const char *doc)");
+const nsqDelete = lib.func("void *nsq_delete(int64_t handle, const char *coll, const char *filter)");
+const nsqDeleteMany = lib.func("void *nsq_delete_many(int64_t handle, const char *coll, const char *filter)");
 const nsqFind = lib.func("void *nsq_find(int64_t handle, const char *coll, const char *query)");
 const nsqCount = lib.func("void *nsq_count(int64_t handle, const char *coll, const char *filter)");
 const nsqCollections = lib.func("void *nsq_collections(int64_t handle)");
@@ -119,9 +121,10 @@ function call(fn: KoffiFunction, ...args: unknown[]): Json {
   }
 
   if (typeof payload.error === "string") {
-    // Note: nsq_insert_many can report an error *and* the ids that did land.
-    // Like the Python binding, we surface the error and drop the partial ids;
-    // see Collection.insertMany's doc comment.
+    // Note: nsq_insert_many and nsq_delete_many can report an error *and* how
+    // far the batch got — the ids that landed, or the number of tombstones
+    // written. Like the Python binding, we surface the error and drop that
+    // partial count; see Collection.insertMany and Collection.deleteMany.
     throw new NoSQLiteError(payload.error);
   }
   return payload;
@@ -153,6 +156,14 @@ export function replace(
 ): number {
   const reply = call(nsqReplace, handle, collection, JSON.stringify(filter ?? {}), JSON.stringify(document));
   return Number(reply.replaced);
+}
+
+export function deleteOne(handle: number, collection: string, filter: Json): number {
+  return Number(call(nsqDelete, handle, collection, JSON.stringify(filter)).deleted);
+}
+
+export function deleteMany(handle: number, collection: string, filter: Json): number {
+  return Number(call(nsqDeleteMany, handle, collection, JSON.stringify(filter)).deleted);
 }
 
 export function find(handle: number, collection: string, query: Json): Json[] {

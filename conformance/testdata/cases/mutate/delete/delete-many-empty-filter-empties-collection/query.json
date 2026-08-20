@@ -1,0 +1,13 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "An empty filter on `delete_many` matches everything and empties the collection. There is no confirmation step and no undo — this case exists to pin that down deliberately rather than discover it.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "delete_many",
+            "filter": {},
+            "matched": 53
+        }
+    ],
+    "filter": {}
+}

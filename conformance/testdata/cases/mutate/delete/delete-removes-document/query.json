@@ -1,0 +1,14 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "A deleted document is gone, and the documents around it close the hole without reordering: the survivors are still in insertion order, just one shorter.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "delete",
+            "filter": {"_id": "3"},
+            "matched": 1
+        }
+    ],
+    "filter": {},
+    "limit": 6
+}

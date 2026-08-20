@@ -1,0 +1,14 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "A delete whose filter matches nothing returns 0 and writes nothing at all — not even a tombstone. The query below cannot fail on its own, so `matched` is what carries the assertion.",
+    "dataset": "people",
+    "mutations": [
+        {
+            "op": "delete",
+            "filter": {"_id": "does-not-exist"},
+            "matched": 0
+        }
+    ],
+    "filter": {},
+    "limit": 5
+}

@@ -88,9 +88,17 @@ case makes its assertion — there is no separate "expected database state" file
 ]
 ```
 
+The ops are `insert`, `replace`, `delete` and `delete_many` — the write half of
+the binding surface, minus `insert_many`, which is what seeding a dataset already
+does. `insert` exists so a case can add a document *after* the dataset is seeded,
+which is the only way to express delete-then-re-insert-the-same-`_id`
+(`cases/mutate/delete/delete-frees-id`).
+
 `matched` is an optional assertion on the count the operation returns, checked
 before the query runs — so a case that fails to mutate reports that directly
-instead of as a confusing diff further down.
+instead of as a confusing diff further down. It is the number deleted or
+replaced, and `1` for a successful `insert`, which returns an id rather than a
+count.
 
 **Rejected writes are cases too.** A mutation can assert that it *must* fail,
 with `error` in place of `matched`:

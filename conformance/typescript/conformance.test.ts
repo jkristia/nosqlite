@@ -175,3 +175,45 @@ test("replace-twice-last-wins", () => {
   expect(got).toEqual(expected);
   expect(gotDocs).toEqual(expectedDocs);
 });
+
+test("delete-removes-document", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/delete/delete-removes-document");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("delete-no-match-is-noop", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/delete/delete-no-match-is-noop");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("delete-only-first-match", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/delete/delete-only-first-match");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("delete-many-removes-all-matches", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/delete/delete-many-removes-all-matches");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("delete-many-empty-filter-empties-collection", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/delete/delete-many-empty-filter-empties-collection");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("delete-frees-id", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/delete/delete-frees-id");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
+
+test("insert-duplicate-id-rejected", () => {
+  const { got, expected, gotDocs, expectedDocs } = cases.run("mutate/delete/insert-duplicate-id-rejected");
+  expect(got).toEqual(expected);
+  expect(gotDocs).toEqual(expectedDocs);
+});
