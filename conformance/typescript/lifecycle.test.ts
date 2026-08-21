@@ -1,7 +1,7 @@
 /**
  * A different shape of test than conformance.test.ts: instead of one fresh,
  * throwaway database per case (deliberate isolation — see case-runner.ts and
- * docs/testing.md §4), this file opens ONE database in `beforeAll`, seeds it
+ * docs/testing.md), this file opens ONE database in `beforeAll`, seeds it
  * once, and runs several queries against that same live handle — closer to
  * how a real process actually uses nosqlite (open once at startup, query
  * many times) than "open, insert, query, close" repeated per assertion.

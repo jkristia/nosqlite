@@ -21,7 +21,7 @@ package engine
 // Applying a projection replaces the deep copy the scan would have made
 // anyway, so a narrower result is also strictly less copying. What it does NOT
 // avoid is the json.Unmarshal that produced the document in the first place;
-// see the partial-parsing item in docs/design.md §11.
+// see the partial-parsing item in docs/design.md §8.
 
 import (
 	"encoding/json"

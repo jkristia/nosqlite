@@ -478,7 +478,7 @@ func (db *DB) replay(fileSize int64) error {
 	// Phase two of the mark-then-compact rule. Nothing shifted during the walk,
 	// so every position stayed valid throughout; now the marked slots come out
 	// in a single pass per collection and each id table is rebuilt around the
-	// survivors. See docs/replace-delete-and-compaction.md §6.4.
+	// survivors. See docs/records.md
 	for _, c := range pendingCompaction {
 		c.compactMarkedSlots()
 	}
@@ -554,7 +554,7 @@ func (db *DB) applyReplay(c *Collection, off int64, length uint32, payload []byt
 // removing one would break the linear probe chain behind it, and there is no
 // spare sentinel to mark a hole with. lookupID skips zero-length slots instead,
 // which is also what lets a later insert of the same _id resolve to the new
-// document rather than to the dead one. See docs/replace-delete-and-compaction.md §6.3
+// document rather than to the dead one. See docs/records.md
 // and §6.4.
 //
 // Called only from replay, which runs inside Open before any other goroutine can

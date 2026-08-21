@@ -18,8 +18,8 @@
 //
 // # Scope
 //
-// Insert, query (filter / sort / skip / limit), Replace and Delete. No
-// projections or secondary indexes yet — see docs/design.md.
+// Insert, query (filter / projection / sort / skip / limit), Replace and
+// Delete. No secondary indexes yet — see docs/design.md.
 //
 // Replace and Delete append a record and leave the old one in the file; the
 // space it holds is reported by DB.DeadBytes and reclaimed only by compaction,
@@ -89,7 +89,7 @@ var (
 
 	// ErrCorrupt is returned when a record in the middle of the file fails its
 	// CRC check. (A bad record at the very end of the file is a torn write and
-	// is repaired automatically instead — see docs/design.md §3.)
+	// is repaired automatically instead — see docs/file-format.md.)
 	ErrCorrupt = errors.New("nosqlite: database file is corrupt")
 )
 

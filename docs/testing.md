@@ -1,86 +1,72 @@
-# nosqlite — testing
+# Testing
 
-How tests are organized, and where a new test should go.
+One engine (Go) and two thin FFI wrappers, so a correctness question only needs
+answering **once** if all three languages run it against the same input and the
+same expected output. That is what conformance tests are, and it drives the whole
+layout.
 
 ---
 
-## 1. Three kinds of test
+## Where does my test go?
 
-nosqlite has one engine (Go) and two thin FFI wrappers (Python, TypeScript) that call
-the same compiled C API in [`capi/`](../capi/). That shape drives the test layout: a
-correctness question ("does `$gte` match this document?") only needs to be answered
-once per language *if* all three languages run it against the same input and check it
-against the same expected output. That's a **conformance** test. It's distinct from a
-**unit** test (one function, one file, one language) and from a **scale** test (does
-it still work — and work fast enough — at a million documents?).
+| I am testing | write | where |
+|---|---|---|
+| one function, one language | a unit test | next to the source |
+| a filter operator, a query behaviour, "do all bindings agree" | a conformance case | `conformance/testdata/cases/` |
+| a write path (replace, delete, re-insert) | a conformance case with `mutations` | `conformance/testdata/cases/mutate/<op>/` |
+| a large or adversarial dataset, or a perf budget | a scale test | `scale/<lang>/` |
 
-| Kind | Answers | Lives | Data |
+```sh
+make test              # Go unit tests
+make test-race         # the concurrency tests are worth running under -race
+make conformance       # Go conformance suite
+make conformance-py    # Python — creates .venv on first run
+make conformance-ts    # TypeScript — jest
+make all               # everything, plus fmt, vet, build, cli
+```
+
+| kind | answers | lives | data |
 |---|---|---|---|
-| Unit | Does this function behave correctly? | Next to the source, per language | Inline, or a per-package `testdata/` |
-| Conformance | Does every binding agree on this behavior? | `conformance/<lang>/` | Shared across the 3 languages, in `conformance/testdata/` |
-| Scale | Does it hold up on large/adversarial datasets? | `scale/<lang>/` | Its own, in `scale/testdata/` |
+| **Unit** | does this function behave? | next to the source, per language | inline, or a per-package `testdata/` |
+| **Conformance** | does every binding agree? | `conformance/<lang>/` | shared, in `conformance/testdata/` |
+| **Scale** | does it hold up at a million documents? | `scale/<lang>/` | its own, in `scale/testdata/` |
 
-Each kind owns its data, colocated with the tests that consume it — there's no single
-repo-wide `testdata/` shared by everything. Conformance and scale want different
-data by nature (conformance: small, representative, one case per behavior; scale:
-large, maybe generated, maybe not worth committing to git at all), so giving them
-separate directories avoids the false suggestion that they're interchangeable.
+Each kind owns its data. Conformance data is small and representative; scale data
+is large and maybe generated — separate directories avoid the false suggestion
+that they are interchangeable.
 
 ---
 
-## 2. Unit tests — next to the source
+## Unit tests
 
-Go convention, and what this repo already does: a `_test.go` file sits beside the
-file it tests, in the same package, so it can reach unexported symbols.
+Go convention: `store_test.go` beside `store.go`, same package, so it can reach
+unexported symbols. Keep them fast and hermetic. A fixture goes in a `testdata/`
+folder next to the package that uses it.
 
-```
-query.go
-query_test.go
-store.go
-store_test.go
-internal/engine/compare.go
-internal/engine/compare_test.go
-```
-
-Run with the normal `go test ./...`. These should stay fast and hermetic — no large
-fixtures, no cross-language concerns. If a unit test needs a fixture file, use the
-standard Go idiom of a `testdata/` folder next to it — e.g.
-`internal/engine/testdata/` for a matcher test that wants a JSON document on disk
-instead of inline. Scoped to that package, not shared with anything else. Python
-and TypeScript follow their own ecosystem's unit-test convention when those
-wrappers grow enough logic to warrant it (`python/tests/`,
-`typescript/nosqlite/*.test.ts`) — a wrapper this thin may never need one.
+Python and TypeScript follow their own ecosystem's convention
+(`python/tests/`, `typescript/nosqlite/*.test.ts`) if those wrappers ever grow
+enough logic to warrant it — a wrapper this thin may never need one.
 
 ---
 
-## 3. Conformance fixtures — `conformance/testdata/`
-
-A dataset (the documents to insert) and a case (one query against a dataset, plus
-its expected result) don't share a lifecycle — the same "1,000 users, mixed
-types" dataset is worth reusing across dozens of filter/sort/skip/limit cases, and
-duplicating it into every case folder would mean updating N copies in lockstep
-whenever it changes. So they're split:
+## Conformance fixtures
 
 ```
-conformance/
-    testdata/
-        query.schema.json        # shape of query.json — see below
-        expected.schema.json     # shape of expected.json
-        datasets/
-            <dataset-name>.jsonl     # documents to insert, one per line — reused by many cases
-        cases/
-            <case-name>/
-                query.json           # {"dataset": ..., "mutations": [...], "filter": ..., "projection": ..., "sort": ..., "skip": ..., "limit": ...}
-                expected.json        # the result every binding must produce for that query
+conformance/testdata/
+    query.schema.json         # shape of query.json
+    expected.schema.json      # shape of expected.json
+    datasets/<name>.jsonl     # documents to insert, one per line — reused by many cases
+    cases/<case-name>/
+        query.json            # {"dataset", "mutations", "filter", "projection", "sort", "skip", "limit"}
+        expected.json         # what every binding must return
 ```
 
-A case names its dataset rather than embedding it, so `query.json` stays small and
-readable, and a dataset can gain new cases without being copy-pasted.
+**A case names its dataset rather than embedding it**, so the same "1,000 users,
+mixed types" dataset serves dozens of cases and gets edited in one place.
 
-**Write behavior is covered by `mutations`.** A case is a *sequence*: seed the
-dataset, apply `mutations` in order, then run the query. The query is how a write
-case makes its assertion — there is no separate "expected database state" file, and
-`expected.json` keeps its one meaning of "what `Find` must return".
+**A case is a sequence:** seed the dataset, apply `mutations` in order, run the
+query. The query is how a write case makes its assertion — there is no separate
+"expected database state" file, and `expected.json` keeps its one meaning.
 
 ```json
 "mutations": [
@@ -88,173 +74,88 @@ case makes its assertion — there is no separate "expected database state" file
 ]
 ```
 
-The ops are `insert`, `replace`, `delete` and `delete_many` — the write half of
-the binding surface, minus `insert_many`, which is what seeding a dataset already
-does. `insert` exists so a case can add a document *after* the dataset is seeded,
-which is the only way to express delete-then-re-insert-the-same-`_id`
-(`cases/mutate/delete/delete-frees-id`).
+| key | means |
+|---|---|
+| `op` | `insert`, `replace`, `delete` or `delete_many` |
+| `matched` | optional assertion on the returned count, checked before the query runs |
+| `error` | assert the write must **fail**, matched as a substring |
 
-`matched` is an optional assertion on the count the operation returns, checked
-before the query runs — so a case that fails to mutate reports that directly
-instead of as a confusing diff further down. It is the number deleted or
-replaced, and `1` for a successful `insert`, which returns an id rather than a
-count.
+`matched` and `error` are mutually exclusive — a failed operation returns no
+count. Error text is matched as a substring because only the message is genuinely
+shared: Go returns an `error`, Python raises, TypeScript throws, and pinning the
+exact rendering would test three error conventions instead of one rule.
 
-**Rejected writes are cases too.** A mutation can assert that it *must* fail,
-with `error` in place of `matched`:
+A rejected write's case then queries the unchanged data, which is how it proves
+the refused write wrote *nothing*.
 
-```json
-{"op": "replace", "filter": {"name": "Emma Osei"},
- "document": {"_id": "7", ...},
- "error": "the filter matched document \"8\", but the replacement carries _id \"7\""}
-```
+`insert` exists as a mutation so a case can add a document *after* seeding, which
+is the only way to express delete-then-re-insert-the-same-`_id`. Omitting
+`mutations` gives a plain read-only case. **An `op` a runner doesn't implement is
+a hard failure, never a skip** — a fixture that silently tested nothing would be
+worse than no fixture.
 
-The text is matched as a **substring**, not compared whole: only the message is
-genuinely shared across the bindings — Go returns an `error`, Python raises
-`NoSQLiteError`, TypeScript throws — so pinning the exact rendering would make the
-fixture a test of three error-reporting conventions instead of one rule. The query
-then runs against the unchanged data, which is how the case proves the refused
-write wrote *nothing*; see `cases/mutate/replace/replace-rejects-mismatched-id`,
-whose query asserts both documents are still intact. `error` and `matched` are
-mutually exclusive (the schema enforces it): a failed operation returns no count.
+**Asserting on documents.** `expected.json` always carries `ids`, the `_id` list
+`Find` must return in order. Beyond that:
 
-Omitting `mutations` entirely gives
-the read-only case the suite started with, which is why the existing query cases
-needed no edit when this arrived. An `op` a runner doesn't implement is a hard
-failure, never a skip: a fixture that silently tested nothing would be worse than
-no fixture.
+- With `fields`, the runner narrows the returned documents to those names itself
+  — client-side and flat — and compares that against `docs`. For cases that query
+  whole documents but only want a few fields spelled out.
+- Without `fields`, `docs` is compared **in full**. That is the mode a case with
+  a `projection` uses, since the shape the engine produced is the point.
 
-Cases that mutate live under `cases/mutate/<op>/`, keeping them findable as a group
-— they are the ones to look at first when a write path changes.
+A projection that drops `_id` is the one case that may omit `ids`.
 
-**Two ways to assert on documents, and `projection` decides which.** `expected.json`
-always carries `ids`, the `_id` list `Find` must return in order. Beyond that:
-
-- With `fields`, the runner narrows the returned documents down to those field
-  names itself — client-side and flat — and compares that against `docs`. This
-  predates projections and stays for cases that query *whole* documents but only
-  want a few fields spelled out in the fixture.
-- Without `fields`, `docs` is compared against what came back **in full**. That is
-  the mode a case with a `projection` in its `query.json` uses, since the shape the
-  engine produced is the whole point of the case (`cases/projection/`).
-
-A projection that drops `_id` is the one situation where `expected.json` may omit
-`ids` — there are none to check, and `docs` carries the assertion alone.
-
-`query.json` and `expected.json` are hand-authored JSON with no compiler behind
-them, which makes "what am I allowed to put in here" a real question — `filter` in
-particular is the Mongo-dialect grammar from [`matcher.md`](matcher.md), not
-something guessable from the field name alone. Rather than inventing a build step,
-each file declares `"$schema"` as its first key, pointing at `query.schema.json` (or
-`expected.schema.json`) — a relative path, so it carries one `../` per level the case
-sits below `cases/`, plus one more for `cases/` itself. `query.schema.json` also
-accepts an optional `description` on a case, for the ones whose point the directory
-name can't carry. Editors with a JSON language service (VS Code out of the box) read
-that and give real autocomplete, hover docs, and validation — the closest thing to a
-typed interface JSON fixtures can have. `$schema` is ignored by the Go/Python/TS
-readers; it's an editor hint, not part of the data.
-
-It lives under `conformance/` rather than at the repo root because it belongs to
-conformance specifically — scale tests want different data entirely (§5), and a
-root-level `testdata/` would wrongly suggest the two share a pool. Go still leaves
-it alone either way (`testdata/` is a build-tool-ignored name at any depth); Python
-and TypeScript reach it by relative path from `conformance/<lang>/`.
-
-Keeping fixtures out of each language's test tree is the point: a new filter
-operator or edge case gets one case, and three test runs (Go, Python, TypeScript)
-either all pass or the disagreement itself is the bug report.
+**`$schema` as the first key.** These are hand-authored JSON with no compiler
+behind them, and `filter` in particular is the [`filters.md`](filters.md) grammar
+rather than anything guessable from the field name. Declaring `"$schema"`
+(a relative path, one `../` per level below `cases/`) gives editors with a JSON
+language service real autocomplete, hover docs and validation — the closest thing
+to a typed interface a JSON fixture can have. The readers ignore it.
 
 ---
 
-## 4. Conformance tests — `conformance/<lang>/`
+## Conformance runners
 
 ```
-conformance/
-    testdata/
-    go/            # package nosqlite_test — public API only, black-box
-    python/        # pytest
-    typescript/    # jest — see §4a
+conformance/go/          package nosqlite_test — public API only, black-box
+conformance/python/      pytest
+conformance/typescript/  jest, its own npm project
 ```
 
 Each suite is **one generic runner**, not one file per case: it walks
-`../testdata/cases/` recursively, and treats any directory containing a
-`query.json` as a case — at any depth. For each one it inserts that case's
-`dataset` (from `../testdata/datasets/`) through the language's public API, applies
-the case's `mutations` if it has any, runs `query.json`, and diffs the result
-against `expected.json`. `conformance/go/` does
-not mirror `testdata/cases/<name>/` on disk — there is deliberately no
-`conformance/go/age-gte`. If there were, every new case would mean writing a new
-test in Go *and* Python *and* TypeScript, which is exactly the duplication the
-shared-fixture split in §3 exists to avoid; a new case should cost one fixture
-folder and zero lines of code in any language.
+`../testdata/cases/` recursively and treats any directory containing a
+`query.json` as a case, at any depth. There is deliberately no
+`conformance/go/age-gte` — a new case should cost one fixture folder and zero
+lines of code, or every case would mean writing a test three times.
 
-The correspondence that does exist is by **name**, not by path: Go's
-`t.Run(caseName, ...)` turns the case's path *relative to `cases/`* into the
-subtest name, so `cases/age-gte` shows up as `TestConformance/age-gte`, and
-`cases/filter/comparison/age-gte` would show up as
-`TestConformance/filter/comparison/age-gte`. Either can be run on its own:
-`go test -tags=conformance -run TestConformance/age-gte ./conformance/go`. Python
-and TypeScript should do the same — parametrize over each case's path relative to
-`cases/` so `pytest -k age-gte` / `-t age-gte` finds the same one.
+The correspondence is by **name**: `cases/filter/comparison/age-gte` becomes
+`TestConformance/filter/comparison/age-gte`, so
+`go test -tags=conformance -run TestConformance/age-gte ./conformance/go` runs
+one case. Python and TypeScript parametrize on the same relative path.
 
-With one case this flat: `cases/age-gte/` is fine. Once there are dozens, group
-them into subdirectories by whatever axis makes them findable — operator
-(`cases/filter/comparison/`, `cases/filter/logical/`), feature
-(`cases/sort/`, `cases/skip-limit/`) — the runner doesn't care, it only cares that
-`query.json` exists somewhere under `cases/`.
-
-The Go suite uses the external test package (`nosqlite_test`, not `nosqlite`) so it
-exercises exactly what Python and TypeScript exercise — the public API, through the
-C boundary where relevant — rather than reaching into internals the way the unit
-tests do.
-
-Gate it behind a build tag so the fast unit-test loop is unaffected:
+The Go suite uses the external test package (`nosqlite_test`) so it exercises
+exactly what the other two exercise — the public API — rather than reaching into
+internals. It is behind a build tag so the fast unit loop is unaffected:
 
 ```go
 //go:build conformance
-
-package nosqlite_test
 ```
 
-```
-go test -tags=conformance ./conformance/...
-```
+### The TypeScript suite
 
----
+Its own `package.json` and `node_modules`, separate from `typescript/`'s, because
+it needs `jest` and `ts-jest` which the shipped binding has no reason to depend
+on.
 
-## 4a. The TypeScript conformance suite
+**`ts-jest`, not Node's type-stripping.** Jest 30 advertises native stripping,
+but its ESM loader (`--experimental-vm-modules`) doesn't run through the code
+path Node patches for it, so a `.ts` test file fails with a plain syntax error.
+An open limitation, not a config mistake.
 
-`conformance/typescript/` is its own small npm project — its own `package.json`
-and `node_modules`, separate from `typescript/`'s — because it needs `jest` and
-`ts-jest`, which the shipped binding has no reason to depend on. `make
-conformance-ts` builds the library and runs it; under the hood that's `npm
---prefix conformance/typescript test`.
-
-**Why `ts-jest`, not plain Node type-stripping.** The rest of the TypeScript
-side deliberately has no build step — Node ≥ 22.18 strips `.ts` type
-annotations at load time, so `node examples/basic/basic.ts` just runs. The
-natural instinct was to keep that here too: Jest 30 advertises native
-type-stripping support with no transformer. In practice it doesn't work —
-Jest's own ESM module loader (`--experimental-vm-modules`) doesn't run
-through the code path Node patches for stripping, so a stripped-nothing
-`.ts` test file fails with a plain syntax error. This is a real, currently
-open limitation, not a config mistake (confirmed by hand: same failure with
-or without `--experimental-strip-types`). `ts-jest` in ESM mode
-(`ts-jest/presets/default-esm`-equivalent config, `useESM: true`) is the
-proven fallback — same `import`/`export` source, just transformed by
-`ts-jest` instead of Node.
-
-**No dynamic test generation — one `test(...)` per case, written by hand.**
-The Go suite discovers cases at runtime (`WalkDir` over `testdata/cases/`,
-§4) so that adding a case costs zero lines of code. The TypeScript suite
-deliberately does *not* do this: `conformance.test.ts` has one explicit,
-named `test("age-gte", ...)` block per case. The reason is debugging, not
-principle — a dynamically-generated test can only be reached by running the
-whole discovery loop and picking out the right iteration; there is no
-`age-gte` you can find with a text search or land a breakpoint directly on.
-An explicit `test(...)` is exactly as findable and breakpointable as any
-other unit test, which is the property that matters here. The cost is one
-line of near-identical boilerplate per new case:
+**One explicit `test(...)` per case, written by hand** — the one deliberate
+divergence from Go's zero-lines-per-case rule. The reason is debugging: a
+dynamically generated test can't be found by text search or landed on with a
+breakpoint. The cost is one boilerplate line per case:
 
 ```ts
 test("some-new-case", () => {
@@ -263,69 +164,29 @@ test("some-new-case", () => {
 });
 ```
 
-That's an intentional divergence from Go's "zero lines of code per case"
-rule, scoped to TypeScript for now. If Go's dynamic `t.Run` subtests turn out
-to have the same debugging friction in practice, apply the same fix there —
-nothing about the fixture format changes either way.
+Everything that isn't the test itself — reading the fixtures, opening a temp
+database, converting `{field, desc}` into `SortKey` tuples — is on one
+`CaseRunner` class in `case-runner.ts`. `cases.run()` returns `{got, expected}`
+so the assertion stays in the test body, where a stopped debugger can inspect
+both. The fixture-format types live there too, not in the binding's public API:
+they describe a *file format*, which is a testing concern.
 
-**Where the fixture-loading logic lives — `conformance/typescript/case-runner.ts`.**
-Everything that isn't the test itself — reading `query.json`/`expected.json`,
-looking up the named dataset, opening a temp database, converting the
-fixture's `{field, desc}` sort keys into nosqlite's `SortKey` tuples — is a
-method on one class, `CaseRunner`. `conformance.test.ts` constructs a single
-`CaseRunner` and each test calls `cases.run("case-name")`, which returns
-`{ got, expected }` for the test to `expect(...)` against — the assertion
-itself stays in the test body, not buried in the class, so a debugger
-stopped on it can inspect both lists directly. `CaseQuery` / `CaseExpected`
-(the fixture-format types) are declared in the same file, not added to
-`typescript/nosqlite/`'s public API — they describe the *fixture file
-format*, which is a testing concern, not something a library consumer needs.
-This mirrors the Go side, where `caseQuery`/`caseExpected` live in
-`conformance/go/conformance_test.go` rather than in the `nosqlite` package.
-
-**Running it from VS Code.** `.vscode/settings.json` sets
-`jest.rootPath: "conformance/typescript"` (so the extension finds this
-project's `jest.config.js`, separate from any future `typescript/` tests) and
-`jest.jestCommandLine: "node --experimental-vm-modules node_modules/.bin/jest"`
-(the flag Jest's ESM support needs, otherwise unrelated to the type-stripping
-question above). With the official `vscode-jest` extension installed, that's
-enough for Test Explorer to discover, run, and debug every case.
+**In VS Code**, `.vscode/settings.json` sets `jest.rootPath` and the
+`--experimental-vm-modules` command line, which is enough for Test Explorer to
+discover, run and debug every case.
 
 ---
 
-## 5. Scale tests — `scale/<lang>/`
+## Scale tests
 
-Same "one fixture, run through every language" idea, but the question and the data
-are both different from conformance: does a large or adversarial dataset still
-behave correctly, and within acceptable time/memory? These assert on timing,
-memory, and absence of panics/corruption more than on exact output — which is why
-they're a separate tree from `conformance/` rather than just "conformance with
-bigger fixtures." Mixing the two makes a slow scale test noisy for correctness
-review, and a strict output-diff noisy for a perf budget.
+Same "one fixture, every language" idea, different question: does a large dataset
+still behave correctly, and within acceptable time and memory? These assert on
+timing, memory and the absence of corruption more than on exact output — mixing
+them with conformance would make a slow test noisy for correctness review and a
+strict output diff noisy for a perf budget.
 
-```
-scale/
-    testdata/      # large, maybe generated — decide per-dataset whether to commit
-                    # it to git or generate it on demand (a `//go:generate` script,
-                    # or a fetch step) once one is actually big enough to matter
-    go/
-```
-
-Add `python/` and `typescript/` here the same way conformance grows: when there's
-an actual second suite to port, not preemptively.
-
----
-
-## 6. Adding a new test
-
-- **Bug in one function, one language** → unit test next to the source, fixture in
-  a per-package `testdata/` if needed.
-- **New filter operator, new query behavior, "does every binding agree"** → a case
-  in `conformance/testdata/`, run through `conformance/go`, `conformance/python`,
-  `conformance/typescript`.
-- **New write behavior** → the same, as a case under `cases/mutate/` whose
-  `mutations` perform the write and whose query observes it (§3). A new `op` also
-  needs the three runners taught to perform it, and the binding surface to exist in
-  all three languages first.
-- **Large dataset, performance, or stress scenario** → `scale/go` (and the other
-  languages once they exist), data in `scale/testdata/`.
+**Measure in the language the database is used from.** The number that matters is
+what a caller experiences end to end, through the FFI boundary and the JSON
+marshalling. A Go figure of 0.1 ms means nothing to a caller waiting 5 s, so the
+consuming language sets the budget and Go benchmarks are the diagnostic layer
+that explains a blown one.

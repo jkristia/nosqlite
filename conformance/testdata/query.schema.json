@@ -50,7 +50,7 @@
         },
         "filter": {
             "type": "object",
-            "description": "Mongo-dialect filter document (query.go's Query.Filter). A bare `\"field\": value` means equality. Operators — usable as a field's value, or $and/$or/$not at any level: $and, $or, $not, $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists. Full grammar: docs/matcher.md."
+            "description": "Mongo-dialect filter document (query.go's Query.Filter). A bare `\"field\": value` means equality. Operators — usable as a field's value, or $and/$or/$not at any level: $and, $or, $not, $eq, $ne, $gt, $gte, $lt, $lte, $in, $nin, $exists. Full grammar: docs/filters.md."
         },
         "projection": {
             "type": "object",

@@ -400,7 +400,7 @@ func decodeFilter(filterJSON *C.char) (map[string]any, error) {
 // for every language on the other side.
 //
 // This shape is the bindings' contract, so it is written down for them in
-// docs/design.md §8 — keep the two in step.
+// docs/bindings.md — keep the two in step.
 type wireQuery struct {
 	Filter map[string]any `json:"filter"`
 	// Projection crosses as the document the caller wrote — {"name": 1} — and

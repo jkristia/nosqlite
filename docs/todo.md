@@ -1,4 +1,4 @@
-# nosqlite — todo
+# Todo
 
 The working list: what to build next, in order, with the decisions that have to be
 made before each one can start.
@@ -7,49 +7,60 @@ made before each one can start.
 item is finished — this file says what is left to do, not what was done. Notes that
 outlive the task belong in the design docs instead.
 
-This is the *task* view. [`design.md`](design.md) §11 is the *architectural* view —
-the same work seen as extension points in the design, and the place to look for
-where a feature is meant to plug in. §11 is ordered by design dependency; this file
-is ordered by what to actually do next. Where they disagree about ordering, this
-file wins; where they disagree about mechanism, §11 does.
+This is the *task* view. [`design.md`](design.md) §8 is the *architectural* view —
+the same work seen as extension points. §8 is ordered by design dependency; this
+file is ordered by what to actually do next. Where they disagree about ordering,
+this file wins; where they disagree about mechanism, §8 does.
 
 ---
 
-## 0. Make `replace-delete-and-compaction.md` readable
+## 0. Finish the docs pass
 
-**Tomorrow's first job.** The document is correct but does not explain — reading it
-does not leave you able to say back how delete and its replay work. Fix the
-explanation, not the facts.
+The docs were restructured on 2026-08-20 — one doc per area, README as an index.
+`README.md`, `api.md`, `filters.md`, `records.md` and `design.md` have since had a
+second pass against the style below. The rest have not been re-read with it.
 
-- [ ] Have the reader mark the exact paragraphs that lost them, and start there.
-      Everything below is a guess at the cause until that exists.
-- [ ] Lead with the worked example. §6's "three inserts and one delete" is the
-      clearest thing in the file and it sits at line ~400, behind three sections of
-      invariants. The trace should come first and the rules should be read off it.
-- [ ] Split §6.4. One section currently carries four separate ideas: the two-phase
-      replay, why the idTable entry cannot be removed, why zero length is the marker,
-      and what an unresolvable tombstone means. Each deserves its own heading.
-- [ ] Cut the justification down. Long stretches argue against designs that were
-      never chosen (free lists, live flags, in-place deletion). Keep one sentence of
-      "not this, because", move the rest out of the reader's path.
-- [ ] Consider splitting the file. Replace, delete, and compaction are three
-      subjects, 845 lines, 26 headings; the terms table exists because the reader is
-      expected to hold all three at once.
+**The style, so it does not have to be re-derived:**
 
-      include projection here as well
+- Lead with the *hows*: a short list of how to do the thing, a few lines of code,
+  no more. Lookup tables beat prose. Reasoning comes last, one sentence per rule.
+- State a rule forward — condition, then consequence. Drop the "but not in case X"
+  clause when the condition already excludes X.
+- No cryptic half-sentences. "Values are typed `unknown`, so narrow with
+  `Number(u.age)`" tells a reader nothing; three annotated lines of code do.
+- Short paragraphs. If it takes a paragraph to find one fact, it is too long.
+
+**Still to re-read:**
+
+- [ ] `file-format.md`
+- [ ] `trace-and-cli.md`
+- [ ] `bindings.md` — only the heading was touched
+- [ ] `compaction.md`
+- [ ] `testing.md`
+- [ ] `getting-started.md`
+- [ ] `nosql-primer.md`
+- [ ] `compression.md` — the 156-line harness appendix: keep in the doc, or move
+      to a runnable file?
+- [ ] `go-primer/` — untouched by the restructure
+
+Also worth doing while in there: the binding docstrings still describe the default
+`find` limit as raising "if that limit is actually hit"
+(`python/nosqlite/__init__.py`, `typescript/nosqlite/index.ts`). The docs now say
+what actually happens — 1000 or more matches — and the source should agree.
 
 ---
 
 ## 1. Compaction
 
-Step 8. Not optional now that delete has landed: `nsq stat` already prints "consider
-`nsq compact <path>`" for a verb that does not exist yet, and a delete makes the file
-bigger until it does.
+Not optional now that delete has landed: `nsq stat` already prints "consider
+`nsq compact <path>`" for a verb that does not exist yet, and a delete makes the
+file bigger until it does. Designed in [`compaction.md`](compaction.md).
 
 - [ ] `Compact()` rewrites the file keeping only live versions, regrouped by
       collection so scan locality is restored.
 - [ ] `nsq compact` CLI verb.
 - [ ] `DropCollection`, which falls out of the same machinery.
+- [ ] Decide the Windows story: rename-over-open fails there.
 
 No format change. Compaction rewrites every record, so **every offset changes**.
 Anything holding an offset — snapshots, and later any index — must be rebuilt or
@@ -77,14 +88,14 @@ from the binding.
 
 ## 3. Secondary indexes
 
-§11 item 2: a planner walking the Matcher tree to turn `cmpNode` / `inNode` on an
-indexed field into a lookup, with the rest as a residual filter.
+A planner walking the Matcher tree to turn `cmpNode` / `inNode` on an indexed
+field into a lookup, with the rest as a residual filter.
 
 **Already decided by the design:** indexes rebuild from the log on open — nothing new
-on disk, so no new op code and no `formatVersion` question. The existing lazy
-`idTable` is the precedent to generalise: it is already a secondary index on `_id`,
-built on first need, and `removeIndex`'s remap is the precedent for what a delete
-costs any index keyed on slot position.
+on disk, so no new op code and no `format` question. The existing lazy `idTable` is
+the precedent to generalise: it is already a secondary index on `_id`, built on first
+need, and `removeIndex`'s remap is the precedent for what a delete costs any index
+keyed on slot position.
 
 Settle before writing code:
 
@@ -107,15 +118,12 @@ where an index definition is recorded.
 
 ## 4. Scale tests — TypeScript and Python
 
-See [`testing.md`](testing.md) §5 for where these live.
+See [`testing.md`](testing.md) for where these live.
 
-**Measure in the language the database is used from.** The number that matters is the
-one a caller experiences end to end, through the FFI boundary and the JSON
-marshalling, not the engine in isolation — a Go figure of 0.1 ms means nothing to a
-caller waiting 5 s. So the consuming language sets the budget, and every language
-that is actually shipped gets its own suite. This is where conformance's
-"test once, run everywhere" reasoning stops applying: semantics are shared,
-performance is not.
+**Measure in the language the database is used from.** The consuming language sets
+the budget, and every language that is actually shipped gets its own suite. This is
+where conformance's "test once, run everywhere" reasoning stops applying: semantics
+are shared, performance is not.
 
 - [ ] TypeScript suite — defines the budget, end to end.
 - [ ] Python suite — same.
@@ -127,8 +135,8 @@ performance is not.
 
 Expect marshalling to dominate. `capi.go`'s `nsq_find` already carries a note that it
 materialises the whole result as one C string on top of the Go slice, and that the
-real fix is a batched `nsq_find_batch` (§11 item 5). These tests are the evidence
-that would justify building it.
+real fix is a batched `nsq_find_batch`. These tests are the evidence that would
+justify building it.
 
 ---
 
@@ -136,9 +144,9 @@ that would justify building it.
 
 No position in the order yet.
 
-- [ ] **Multi-process exclusion** — `flock` on the database file (§11 item 7).
-      Nothing stops two processes opening one file today, which stops being
-      theoretical the moment this is installed into a real app (item 2).
+- [ ] **Multi-process exclusion** — `flock` on the database file. Nothing stops two
+      processes opening one file today, which stops being theoretical the moment
+      this is installed into a real app (item 2).
 - [ ] **Fuzz the replay path** — Go has native fuzzing and `Open` against truncated
       or corrupt files is a natural target. Cheap, and this is a storage engine.
 - [ ] **`Update(filter, {$set: ...})`** — the operator-style sibling of `Replace`.
@@ -147,28 +155,9 @@ No position in the order yet.
       index has already been updated, `Replace` reports `(0, err)` even though the
       document was replaced in memory. `DeleteMany` deliberately does not copy this,
       returning what actually landed; `Replace` should be brought into line.
-- [ ] **Partial parsing** — §11 item 4, the single biggest scan-speed win available.
-      Worth more now that projections have landed: `RequiredPaths()` can be
-      filter-fields ∪ projected-fields, so even a matching document never needs a
-      full decode.
-- [ ] Quick-start examples in `README.md`, both binding module docstrings and
-      `examples/basic/*` still show only insert and find. Adding `Replace`,
-      `Delete` and a projection means doing all three languages, since they are
-      kept parallel.
-- [ ] **Lead reference sections with the lookup, not the argument.** These docs are
-      written to be *read* — claim, then justification — which makes them poor to
-      *consult*. Two questions in a row hit the same wall while projections were
-      landing: `{"age": 1}` sent a reader looking for what `1` means, and nothing
-      said why an exclusion projection exists at all. Both answers were in the
-      docs, several paragraphs deep, which is the same as not being there.
-
-      The rule for the pass: **the lookup first, the shapes second, the reasoning
-      last**, so prose is opt-in and a reader who needs one fact can stop after
-      one line. Projections in `README.md` and design §5 are done and are the
-      worked example of the shape to copy.
-
-      Candidates, in the order they are most likely to be consulted mid-task:
-      `matcher.md` §4 (compilation rules) and §6 (value semantics), the trace-file
-      section of `README.md`, and §0's document once it is split. Note this is the
-      same complaint §0 makes about one file, generalised — do §0 first and the
-      pattern for the rest falls out of it.
+- [ ] **Partial parsing** — the single biggest scan-speed win available. Worth more
+      now that projections have landed: `RequiredPaths()` can be filter-fields ∪
+      projected-fields, so even a matching document never needs a full decode.
+- [ ] **Examples show only insert and find.** Both binding module docstrings and
+      `examples/basic/*` predate `Replace`, `Delete` and projections. Adding them
+      means doing all three languages, since the examples are kept parallel.

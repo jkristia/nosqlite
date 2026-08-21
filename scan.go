@@ -59,7 +59,7 @@ func (c *Collection) scanRecords(snap snapshot, visit func(i int, payload []byte
 	// record is superseded by a replace or a delete. scanSequential re-derives
 	// membership from the file; scanStrided reads the index. Once dirty is set,
 	// only the index knows which records are still live, so the strided path is
-	// the only correct one. See docs/replace-delete-and-compaction.md §2.2.
+	// the only correct one. See docs/records.md
 	if !snap.dirty && snap.total > 0 && float64(n)/float64(snap.total) >= sequentialScanRatio {
 		return c.scanSequential(snap, visit)
 	}

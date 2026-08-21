@@ -94,7 +94,7 @@ ts-check: ts-deps
 	@echo "typescript: no type errors"
 
 # The `conformance` build tag keeps this out of `make test` / `go test ./...`
-# — see docs/testing.md §4 for why it's a separate suite.
+# — see docs/testing.md for why it's a separate suite.
 conformance:
 	go test -tags=conformance ./conformance/...
 

@@ -25,7 +25,7 @@ Two decisions, settled before writing code:
   forces an explicit `nil`.
 - **The conformance `insert` op ships in this batch.** It is ~3 lines per runner
   and it is the only way to express §6.5 of
-  [`replace-delete-and-compaction.md`](../docs/replace-delete-and-compaction.md)
+  [`records.md`](../docs/records.md)
   — delete, then re-insert the same `_id` — across bindings. Today a case can
   only insert through its dataset.
 
@@ -111,7 +111,7 @@ membership, because order is precisely the property delete does not preserve.
 
 **TypeScript test blocks** — Go and Python discover cases by walking the tree;
 `conformance/typescript/conformance.test.ts` writes one explicit `test(...)` per
-case on purpose (docs/testing.md §4a), so each new case needs a block appended.
+case on purpose (docs/testing.md ("The TypeScript suite")), so each new case needs a block appended.
 
 ## 5. Docs
 

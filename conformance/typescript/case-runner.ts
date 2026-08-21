@@ -1,6 +1,6 @@
 /**
  * Loads and runs one conformance case against nosqlite's public TypeScript
- * API. See ../../docs/testing.md §4a for why this is a class rather than
+ * API. See ../../docs/testing.md ("The TypeScript suite") for why this is a class rather than
  * standalone functions, and why conformance.test.ts writes one explicit
  * `test(...)` per case instead of generating them from the filesystem.
  */
