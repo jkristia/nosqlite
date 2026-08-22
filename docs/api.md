@@ -101,9 +101,9 @@ func ScanLive(path string) (LiveStats, error)   // live/dead accounting, offline
 ```
 
 **`Find` versus `ForEach`.** `Find` materialises its results, so a filter
-matching a million documents returns a million documents no matter how frugal
-the engine was. `ForEach` retains nothing between callbacks — reach for it over
-a large result set, and return an error (or `ErrStop`) to halt the scan.
+matching a million documents returns a million documents in memory. `ForEach`
+retains nothing between callbacks — reach for it over a large result set, and
+return an error (or `ErrStop`) to halt the scan.
 
 **Numbers are `float64`.** JSON has no integer type, so `42` round-trips as
 `float64(42)`:

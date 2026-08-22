@@ -142,6 +142,29 @@ matters:
 That ceiling is ~85M documents per GB of index, with the data itself bounded only
 by disk.
 
+### Where this stops working
+
+Two ceilings, and the second one is reached first.
+
+| | grows with | at 1M docs | what it means |
+| --- | --- | --- | --- |
+| index memory | documents, always resident | 12 MB | ~85M docs/GB; 100M docs is ~1.2 GB before a query runs |
+| query time | documents × queries, every time | 1–3 s per scan | there is no index to skip past a document with |
+
+**Every query reads and JSON-decodes every document in the collection.** That is
+the trade §3 is buying, and it is what sets the practical ceiling: a dataset is
+too large for v1 when a full scan is too slow to run per query, which arrives
+long before the memory ceiling does. Roughly — 1M documents is the design
+target, 10M is usable for scripts and batch work, and beyond that a query costs
+tens of seconds each time.
+
+Opening grows with file size too, but far more gently: replay reads the file
+sequentially to rebuild the index and parses no JSON while doing it — about a
+second per 300 MB.
+
+Secondary indexes (§8) are the fix, and they trade against the first row: an
+index costs its own resident bytes per document, per index, on top of the 12.
+
 ### Readers do not need the lock
 
 This falls out of the log being append-only, and it shapes everything else:
@@ -190,8 +213,14 @@ The last one is inherent to sorting rather than to this design: you cannot know
 the first result until you have seen the last candidate. Adding a `Limit` is the
 answer. An external merge sort would be the other one, and v1 does not have it.
 
+Two things that table can be misread as saying. **A limit bounds memory, not
+work** — only the unsorted shape stops the scan early; a sorted one decodes
+every document whatever the limit. And **`Skip` counts against the bound**:
+`Skip: 1000000, Limit: 10` holds a million and ten. Deep pagination is better
+expressed as a filter on the sort field ([`filters.md`](filters.md)).
+
 `Find` returns a slice, so a filter matching a million documents produces a
-million documents in the caller's memory no matter how frugal the engine was.
+million documents in the caller's memory, however little the scan itself held.
 `ForEach` is the streaming escape hatch: it hands each match to a callback and
 retains nothing. It is a callback rather than a cursor deliberately — a cursor
 needs its own lifetime, a `Close`, and rules for outliving a write, whereas a

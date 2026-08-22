@@ -17,8 +17,7 @@ this file wins; where they disagree about mechanism, §8 does.
 ## 0. Finish the docs pass
 
 The docs were restructured on 2026-08-20 — one doc per area, README as an index.
-`README.md`, `api.md`, `filters.md`, `records.md` and `design.md` have since had a
-second pass against the style below. The rest have not been re-read with it.
+Each one then gets a second pass against the style below.
 
 **The style, so it does not have to be re-derived:**
 
@@ -29,6 +28,14 @@ second pass against the style below. The rest have not been re-read with it.
 - No cryptic half-sentences. "Values are typed `unknown`, so narrow with
   `Number(u.age)`" tells a reader nothing; three annotated lines of code do.
 - Short paragraphs. If it takes a paragraph to find one fact, it is too long.
+
+**Re-read:**
+
+- [x] `README.md`
+- [x] `api.md`
+- [x] `filters.md`
+- [x] `records.md`
+- [x] `design.md`
 
 **Still to re-read:**
 
@@ -103,6 +110,13 @@ Settle before writing code:
       changes offsets. Slot-keyed (indirecting through the existing offsets array)
       makes compaction nearly free and delete the expensive one. Offset-keyed
       inverts that. This is the reason indexes come after both.
+- [ ] **Where do the key values live?** `idTable` gets away with `[]uint64`
+      fingerprints because `_id` lookup is equality-only and a hit is verified by
+      reading the record. Anything serving `$gte`/`$lt`/`Sort` needs the real keys in
+      sorted order, and a million string keys is a million pointers for the GC to
+      walk on every cycle — the exact cost the parallel-array index exists to avoid.
+      Either range indexes are numeric/fixed-width only, or there is an interned
+      string arena, or the pointer-free property is given up for indexed fields.
 - [ ] **Documents missing the indexed field.** If they are simply absent from the
       index, then `$exists:false` and `$ne` cannot be answered from it and the
       planner needs a scan fallback for negation. MongoDB has the same wart. Decide

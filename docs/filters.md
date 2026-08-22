@@ -1,7 +1,17 @@
 # Filters and projections
 
-The query dialect: which documents come back, and which fields of them. It is
-Mongo's, so one filter works from Go, Python, TypeScript and the CLI unchanged.
+A read takes two arguments. The **filter** selects which documents to return,
+the **projection** selects which of their fields:
+
+```
+filter      {"age": {"$gte": 30}}    everyone 30 or older
+projection  {"name": 1, "age": 1}    of each, only the name and the age
+```
+
+Both are ordinary maps — a Go `map[string]any`, a Python dict, a JSON object —
+in a subset of MongoDB's dialect, so one filter is written the same way in Go,
+Python, TypeScript and the CLI. Filters are used by `Find`, `Count`, `Replace`
+and `Delete`; projections only by `Find`.
 
 Code: [`internal/engine/compile.go`](../internal/engine/compile.go),
 [`match.go`](../internal/engine/match.go),
@@ -73,9 +83,41 @@ disagree. Documents missing the sort field group together at the start. Ties
 break by insertion order, so `Sort`+`Limit` returns the same documents in the
 same order on every run.
 
-`Sort` without `Limit` is the one query shape that can exhaust memory: every
-match must be materialised before it can be ordered. With a limit, the engine
-keeps a bounded heap of `Skip+Limit` documents and nothing more.
+**A limit bounds memory, not work.** A sorted query always scans and decodes
+every document in the collection — the first result is not knowable until the
+last candidate has been seen. What the limit changes is how many are still held
+when the scan ends.
+
+Without a `Limit`, that is every match: they must all be materialised before
+they can be ordered. With one, the engine keeps a bounded heap of `Skip+Limit`
+documents and nothing more — but the bound is what *you* asked for, and `Skip`
+is part of it. `Skip: 1000000, Limit: 10` holds a million and ten.
+
+**Paging.** `Skip` is paid for in memory: to know which ten to skip, the engine
+has to materialise them. Page 1000 of a ten-per-page listing is `Skip: 9990`,
+which holds 10,000 documents to hand you 10.
+
+Ask for "the next ten after the last one I saw" instead. Both of these return
+the same page 2, but only one of them grows:
+
+```
+page 1   sort age desc, limit 10                        → ages 99…90, last seen 90
+
+page 2   sort age desc, limit 10, skip 10               → heap holds 20
+page 2   sort age desc, limit 10, {"age": {"$lt": 90}}  → heap holds 10
+```
+
+The filter form stays at `Limit` on every page, because a non-match is rejected
+before it ever reaches the heap. It needs the last value from the previous page,
+so it pages forward from where you are rather than jumping to an arbitrary page
+number — and it needs a tiebreak, or documents sharing the boundary value are
+skipped:
+
+```
+sort    age desc, _id asc
+filter  {"$or": [{"age": {"$lt": 90}},
+                 {"$and": [{"age": 90}, {"_id": {"$gt": <last id seen>}}]}]}
+```
 
 ---
 
@@ -95,15 +137,20 @@ keeps a bounded heap of `Skip+Limit` documents and nothing more.
 |---|---|
 | `{"name": 1, "age": 1}` | only these fields, plus `_id` |
 | `{"email": 0, "tags": 0}` | everything except these |
-| `{"name": 1, "_id": 0}` | `_id` is the one field exempt from the no-mixing rule |
+| `{"name": 1, "_id": 0}` | `_id` comes back unless you drop it |
 | `{"address.city": 1}` | the subdocument rebuilt: `{"address": {"city": …}}` |
 | `{"items.qty": 1}` | an array of subdocuments projected element-wise |
 
 ## Projection — the rules
 
-- **Inclusion and exclusion cannot be mixed.** "Keep name" and "drop email"
-  together leaves every other field's fate unstated. `_id` is the exception, as
-  in MongoDB.
+- **Any inclusion makes it an inclusion projection.** Name one field to include
+  and you get exactly the fields you named — everything else is dropped, whether
+  or not you said so. An exclusion beside an inclusion is therefore ignored:
+  `{"name": 1, "email": 0}` returns `name` and `_id`, the same as `{"name": 1}`.
+- **Naming the same field both ways is an error.** `{"address": 1,
+  "address.city": 0}` says keep address and drop part of it. That is a real
+  disagreement about a field the projection was going to return, not a
+  redundancy, so it is rejected.
 - **Prefer inclusion.** If you can name the fields you want, name them.
 - **Use exclusion only for "the whole document, minus this"** — dropping a
   credential or a large blob, `{"password_hash": 0}`, `{"embedding": 0}`. The
