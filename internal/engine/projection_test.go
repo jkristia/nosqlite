@@ -125,6 +125,23 @@ func TestProjectionApply(t *testing.T) {
 			want: `{"_id": "1", "name": "Ada", "age": 36}`,
 		},
 		{
+			// An inclusion already returns only what it names, so the
+			// exclusion has nothing left to drop.
+			name: "an exclusion beside an inclusion is ignored",
+			spec: map[string]any{"name": 1, "age": 0},
+			want: `{"_id": "1", "name": "Ada"}`,
+		},
+		{
+			name: "sibling paths under one field: only the included one survives",
+			spec: map[string]any{"address.city": 1, "address.zip": 0},
+			want: `{"_id": "1", "address": {"city": "London"}}`,
+		},
+		{
+			name: "an ignored exclusion still cannot resurrect _id: 0",
+			spec: map[string]any{"name": 1, "age": 0, "_id": 0},
+			want: `{"name": "Ada"}`,
+		},
+		{
 			name: "true and false work as well as 1 and 0",
 			spec: map[string]any{"name": true, "_id": false},
 			want: `{"name": "Ada"}`,
@@ -194,14 +211,14 @@ func TestCompileProjectionErrors(t *testing.T) {
 		want string // substring the message must contain
 	}{
 		{
-			name: "mixing inclusion and exclusion",
-			spec: map[string]any{"name": 1, "email": 0},
-			want: "mixes inclusion and exclusion",
+			name: "excluding a field that is also included",
+			spec: map[string]any{"address": 1, "address.city": 0},
+			want: `includes "address" and excludes "address.city"`,
 		},
 		{
-			name: "mixing through dotted paths",
-			spec: map[string]any{"address.city": 1, "address.zip": 0},
-			want: "mixes inclusion and exclusion",
+			name: "excluding the parent of an included field",
+			spec: map[string]any{"address.city": 1, "address": 0},
+			want: `includes "address.city" and excludes "address"`,
 		},
 		{
 			name: "$slice is not supported",

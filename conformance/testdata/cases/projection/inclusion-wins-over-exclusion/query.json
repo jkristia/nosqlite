@@ -1,0 +1,7 @@
+{
+    "$schema": "../../../../query.schema.json",
+    "description": "Naming any field for inclusion makes the whole projection an inclusion, so the exclusion beside it changes nothing: age is dropped because it was not included, not because it was excluded.",
+    "dataset": "people",
+    "filter": {"_id": {"$in": ["1", "3"]}},
+    "projection": {"name": 1, "age": 0}
+}

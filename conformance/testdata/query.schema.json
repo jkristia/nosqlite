@@ -54,7 +54,7 @@
         },
         "projection": {
             "type": "object",
-            "description": "Which fields the query returns (query.go's Query.Projection). Keys are field paths; a value of 1 (or true) INCLUDES that field, 0 (or false) EXCLUDES it, and nothing else is accepted. `{\"name\": 1, \"address.city\": 1}` keeps only those fields; `{\"email\": 0}` keeps everything else. Inclusion and exclusion cannot be mixed in one projection, except `_id`, which is returned unless excluded with `{\"_id\": 0}`. A dotted key rebuilds the subdocument rather than flattening the key. Omit to return whole documents. A case using this normally sets `docs` in expected.json (without `fields`) so the projected shape itself is what gets compared.",
+            "description": "Which fields the query returns (query.go's Query.Projection). Keys are field paths; a value of 1 (or true) INCLUDES that field, 0 (or false) EXCLUDES it, and nothing else is accepted. `{\"name\": 1, \"address.city\": 1}` keeps only those fields; `{\"email\": 0}` keeps everything else. Naming any field for inclusion makes the whole projection an inclusion, so an exclusion beside it is ignored; naming the same field both ways is an error. `_id` is returned unless excluded with `{\"_id\": 0}`. A dotted key rebuilds the subdocument rather than flattening the key. Omit to return whole documents. A case using this normally sets `docs` in expected.json (without `fields`) so the projected shape itself is what gets compared.",
             "additionalProperties": { "type": ["integer", "boolean"] }
         },
         "sort": {

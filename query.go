@@ -46,13 +46,15 @@ type Query struct {
 	//   1 (or true)   include this field
 	//   0 (or false)  exclude this field
 	//
-	// so a projection is either an inclusion or an exclusion, never both:
+	// so a projection is one of two things:
 	//
 	//   map[string]any{"name": 1, "address.city": 1}  // only these fields
 	//   map[string]any{"email": 0, "address.zip": 0}  // everything but these
 	//
-	// _id is the exception to that rule: it is included by default, so it may
-	// be excluded from an inclusion projection with {"_id": 0}. A dotted path
+	// Name even one field to include and the result is exactly the fields
+	// named, so an exclusion beside it is ignored — it has nothing left to
+	// drop. Naming the same field both ways is an error. _id is included by
+	// default and {"_id": 0} drops it. A dotted path
 	// rebuilds a partial subdocument rather than flattening the key:
 	// {"address.city": 1} yields {"address": {"city": ...}}. Array projection
 	// operators ($slice, the positional $) are not supported and are rejected

@@ -54,8 +54,10 @@ export type SortKey = [field: string, direction: 1 | -1];
 
 /**
  * Which fields to return: `{ name: 1, "address.city": 1 }` keeps only those,
- * `{ email: 0 }` keeps everything else. The two cannot be mixed in one
- * projection — except `_id`, which comes back unless you ask for `_id: 0`.
+ * `{ email: 0 }` keeps everything else. Naming one field to include makes the
+ * whole projection an inclusion, so an exclusion beside it is ignored; naming
+ * the same field both ways is an error. `_id` comes back unless you ask for
+ * `_id: 0`.
  *
  * A dotted key rebuilds the subdocument rather than flattening the key, so
  * `{ "address.city": 1 }` yields `{ address: { city: "Oslo" } }`.

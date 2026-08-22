@@ -106,16 +106,34 @@ func TestForEachProject(t *testing.T) {
 	}
 }
 
+// One inclusion makes the whole projection an inclusion, so the exclusion
+// beside it asks for something that has already happened.
+func TestFindProjectInclusionWins(t *testing.T) {
+	c := sample(t)
+
+	docs, err := c.Find(Query{
+		Filter:     map[string]any{"_id": "1"},
+		Projection: map[string]any{"name": 1, "age": 0},
+	})
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	want := []map[string]any{{"_id": "1", "name": "Ada"}}
+	if !reflect.DeepEqual(docs, want) {
+		t.Errorf("Find() = %v, want %v", docs, want)
+	}
+}
+
 // A bad projection must fail the query rather than being ignored.
 func TestFindProjectInvalid(t *testing.T) {
 	c := sample(t)
 
-	_, err := c.Find(Query{Projection: map[string]any{"name": 1, "age": 0}})
+	_, err := c.Find(Query{Projection: map[string]any{"address": 1, "address.city": 0}})
 	if err == nil {
-		t.Fatal("Find with a mixed projection returned no error")
+		t.Fatal("Find with a contradictory projection returned no error")
 	}
-	if !strings.Contains(err.Error(), "mixes inclusion and exclusion") {
-		t.Errorf("error = %q, want it to mention mixing inclusion and exclusion", err)
+	if !strings.Contains(err.Error(), "name the same field") {
+		t.Errorf("error = %q, want it to say the two keys name the same field", err)
 	}
 }
 

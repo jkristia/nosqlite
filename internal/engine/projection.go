@@ -7,11 +7,17 @@ package engine
 //	{"name": 1, "address.city": 1}   // inclusion: only these fields survive
 //	{"email": 0, "address.zip": 0}   // exclusion: everything BUT these
 //
-// The two cannot be mixed in one projection — "keep name" and "drop email"
-// together would leave every other field's fate unstated — with one exception:
-// _id, which is included by default and so has to be excludable from an
-// otherwise-inclusion projection. MongoDB draws the line in exactly the same
-// place, and this package follows it.
+// Inclusion wins when a projection has both: name one field to include and the
+// result is exactly the fields you named, so an exclusion beside it has nothing
+// left to drop and is ignored. {"name": 1, "email": 0} returns name and _id.
+//
+// The one thing that is not ignored is a contradiction — an exclusion that
+// names the same field as an inclusion, {"address": 1, "address.city": 0}. That
+// is a real disagreement about a field the projection was going to return, so
+// it is an error.
+//
+// _id needs no rule of its own: it is included by default, and {"_id": 0}
+// excludes it like any other field.
 //
 // A dotted path rebuilds a partial subdocument rather than flattening the key:
 // {"address.city": 1} yields {"address": {"city": "Oslo"}}, never
@@ -35,7 +41,8 @@ import (
 type Projection struct {
 	// include distinguishes the two kinds. Every path in the tree is then
 	// either the only thing kept (inclusion) or the only thing dropped
-	// (exclusion).
+	// (exclusion) — a compiled projection has one direction, whatever the
+	// spec it came from named.
 	include bool
 	root    *projNode
 }
@@ -82,14 +89,13 @@ func CompileProjection(spec map[string]any) (*Projection, error) {
 		return nil, nil
 	}
 
-	var (
-		root      = &projNode{}
-		fields    int    // non-_id fields seen, which is what sets the direction
-		include   bool   // the direction those fields agree on
-		first     string // the field that set it, named in the error if one disagrees
-		idPresent bool
-		idKeep    bool
-	)
+	// One field's 1 or 0, kept with the path it compiled to so an error can
+	// name the field the way the caller wrote it.
+	type entry struct {
+		field string
+		path  []string
+	}
+	var incl, excl []entry
 
 	// Sorted so that a spec with several mistakes in it always reports the same
 	// one, whatever order the map happened to iterate in.
@@ -98,51 +104,74 @@ func CompileProjection(spec map[string]any) (*Projection, error) {
 		if err != nil {
 			return nil, err
 		}
-
-		// _id is exempt from the mixing rule below, in both directions: it is
-		// the one field that is included by default, so naming it says which
-		// way that default goes and nothing about the rest of the document.
-		if field == "_id" {
-			idPresent, idKeep = true, keep
-			continue
-		}
-
 		if err := validPath(field); err != nil {
 			return nil, err
 		}
-		if fields == 0 {
-			include, first = keep, field
-		} else if keep != include {
-			kept, dropped := first, field
-			if keep {
-				kept, dropped = field, first
-			}
-			return nil, fmt.Errorf(
-				"nosqlite: projection mixes inclusion and exclusion: %q says keep, %q says drop; "+
-					"a projection either lists the fields to keep or the fields to drop, not both",
-				kept, dropped)
+		e := entry{field, SplitPath(field)}
+		if keep {
+			incl = append(incl, e)
+		} else {
+			excl = append(excl, e)
 		}
-		fields++
-		root.insert(SplitPath(field))
 	}
 
-	if fields == 0 {
-		// Only _id was named, so it is the field that sets the direction after
-		// all: {"_id": 1} is an inclusion projection of nothing else, {"_id": 0}
-		// an exclusion of nothing else.
-		root.insert([]string{"_id"})
-		return &Projection{include: idKeep, root: root}, nil
+	root := &projNode{}
+
+	// Nothing included: the spec is an exclusion list, and the tree names what
+	// to drop. _id is in it only if the caller put it there.
+	if len(incl) == 0 {
+		for _, e := range excl {
+			root.insert(e.path)
+		}
+		return &Projection{include: false, root: root}, nil
 	}
 
-	// Otherwise _id rides along with the direction the other fields set. The
-	// tree names what an inclusion projection KEEPS and what an exclusion
-	// projection DROPS, so _id belongs in it either when it survives an
-	// inclusion or when it is dropped from an exclusion.
-	keepID := !idPresent || idKeep
-	if include == keepID {
+	// One inclusion makes the whole projection an inclusion. The tree is the
+	// included paths, and every field not in it is already gone — which is why
+	// the exclusions below need only be checked, not applied.
+	for _, e := range incl {
+		root.insert(e.path)
+	}
+
+	idExcluded := false
+	for _, e := range excl {
+		for _, in := range incl {
+			// Two paths where one contains the other name the same field, so
+			// the projection both keeps it and drops it. Anything else is an
+			// exclusion of a field the inclusion list had already dropped:
+			// redundant, and harmless.
+			if pathContains(e.path, in.path) || pathContains(in.path, e.path) {
+				return nil, fmt.Errorf(
+					"nosqlite: projection includes %q and excludes %q, which name the same field; "+
+						"drop one of them — an inclusion already drops every field it does not name",
+					in.field, e.field)
+			}
+		}
+		if e.field == "_id" {
+			idExcluded = true
+		}
+	}
+
+	// _id is included by default, so it joins the tree unless it was named for
+	// exclusion.
+	if !idExcluded {
 		root.insert([]string{"_id"})
 	}
-	return &Projection{include: include, root: root}, nil
+	return &Projection{include: true, root: root}, nil
+}
+
+// pathContains reports whether outer names a field that inner is part of —
+// ["address"] contains ["address","city"], and every path contains itself.
+func pathContains(outer, inner []string) bool {
+	if len(outer) > len(inner) {
+		return false
+	}
+	for i, seg := range outer {
+		if inner[i] != seg {
+			return false
+		}
+	}
+	return true
 }
 
 // projectionValue reads one field's 1/0 (or true/false).
