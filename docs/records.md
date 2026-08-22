@@ -1,8 +1,9 @@
 # Records: insert, replace, delete
 
-Every write is an append. Nothing on disk is ever modified in place, so what a
-document *currently* is gets decided in memory — [`collection.go`](../collection.go),
-[`index.go`](../index.go), [`store.go`](../store.go).
+Every write is an append. Nothing on disk is ever modified in place, so the file
+keeps every version of every document; the in-memory index is what picks the
+current one ([`collection.go`](../collection.go), [`index.go`](../index.go),
+[`store.go`](../store.go)).
 
 > **A record is dead if, and only if, nothing in the in-memory index points at it.**
 
@@ -72,10 +73,25 @@ reading a document cost "base record plus every diff since", and make replay
 order-dependent — trading a solved problem (bytes on disk, which compaction
 reclaims) for an unsolved one.
 
-**`_id` is immutable.** The replacement keeps the matched document's `_id`;
-carrying a different one is `ErrImmutableID`. An `_id` in the replacement is not
-a second way to pick the document — the filter always picks — it is a free
-assertion that the filter found the one you meant.
+**`_id` is immutable.** The replacement always keeps the `_id` of the document
+the filter matched. What the replacement itself carries only decides whether the
+write happens at all:
+
+| `_id` in the replacement | result |
+|---|---|
+| absent | matched document's `_id` is kept |
+| same as the matched document's | same, plus a free assertion that you hit the right one |
+| **different** | `ErrImmutableID` — nothing is written |
+
+The mismatch is worth an error because an `_id` in the replacement is not a
+second way to pick the document — the filter always picks. Leave it out and a
+filter that selects the wrong document overwrites it, silently and irreversibly.
+So the error names both sides and where each came from:
+
+```
+the filter matched document "ord-1", but the replacement carries _id "ord-2";
+one of them is wrong
+```
 
 **The document keeps its slot**, so insertion order is preserved: a replaced
 document stays where it was in an unsorted result instead of jumping to the end.
@@ -95,18 +111,29 @@ derived state, rebuilt from the file on every `Open` — drop the slot in memory
 only, restart, and replay finds the original insert record and the document
 comes back. No running query ever reads an `op=2` record.
 
-**The slot is removed, not tombstoned**, which keeps `Len()` exactly
-`len(c.offsets)` and lets `Count(nil)` short-circuit with no I/O. The O(n) shift
-is free because the index arrays are being copied anyway (below).
+**The slot is removed, not marked dead.** Deleting the document at position 1
+shifts every later position down by one, so the index holds exactly one slot per
+live document — never a mix of live and dead ones. The document count is
+therefore the index's own length, which is why counting with no filter is a
+lookup rather than a scan and never touches the file.
 
-**The filter is required in every binding**, unlike `find` and `count`. Delete
-is the one operation in this API with no undo, so emptying a collection must not
-be the easiest thing to type — the same reason Mongo splits `deleteOne` from
-`deleteMany`.
+**The shift costs nothing extra.** Dropping an entry from the middle of a list
+normally means moving everything after it down — but a delete rebuilds the index
+from scratch regardless, because a reader may still be walking the old one
+([below](#what-mutation-costs-the-fast-paths)). Every surviving slot is being
+copied into a new index either way; the deleted ones are simply not copied.
 
-**Deleting makes the file bigger.** Until [`Compact`](compaction.md) exists, a
-delete costs the tombstone *plus* the original document's bytes, which are still
-there. A deleted 300-byte document costs ~340 bytes, then zero after a compaction.
+**A filter argument is required**, in every language. `find` and `count` let you
+leave it out and read that as "everything", which is harmless. Here the same
+default would empty the collection. Delete is the one operation in this API with
+no undo, so emptying a collection must not be the easiest thing to type — the
+same reason `Delete` and `DeleteMany` are separate calls, and the reason Mongo
+splits `deleteOne` from `deleteMany`.
+
+**Deleting makes the file bigger.** The original bytes stay where they are and a
+tombstone is appended on top, so a deleted 300-byte document leaves ~340 dead
+bytes behind — the abandoned record plus the tombstone naming its `_id`.
+[`Compact`](compaction.md) is what turns that back into zero; nothing else does.
 
 ---
 

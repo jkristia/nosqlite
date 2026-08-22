@@ -34,8 +34,25 @@ Each one then gets a second pass against the style below.
 - [x] `README.md`
 - [x] `api.md`
 - [x] `filters.md`
-- [x] `records.md`
 - [x] `design.md`
+
+**In progress:**
+
+- [ ] `records.md` — reworked down to the end of Delete (opening paragraph, the
+      `_id`-immutability rule, slot removal, the required filter, dead bytes).
+      **Continue at "Worked example: three inserts and one delete".** Still open
+      in the sections below it:
+      - Go vocabulary that a language-neutral doc should not use: the slot/offset
+        table names `c.offsets` / `c.lengths`; "What mutation costs the fast
+        paths" is built on Go's three-index slice (`c.offsets[0:n:n]`, "low,
+        high, capacity") and names `Collection.dirty`. The three-index part is
+        the hard one — the guarantee it describes really is that language
+        feature, so neutral wording may cost the mechanism.
+      - "replay" is used at the tombstone paragraph but only defined 50 lines
+        later, under "Replay rebuilds all of it". Decide whether to gloss it on
+        first use.
+      - "torn tail" has the same problem: used in the opening section, defined in
+        [`file-format.md`](file-format.md). A pointer on first use would do.
 
 **Still to re-read:**
 
